@@ -222,7 +222,7 @@ class NativeTensor:
 DTYPE = 'object'
 # Q = 2657003489534545107915232808830590043  # prime
 # Q = 2658455991569831745807614120560689152  # 2**121
-two_exp = 121
+two_exp = 5 #121
 Q = 2 ** two_exp
 
 
@@ -237,8 +237,8 @@ MAX_SUM = 2 ** 12
 assert MAX_DEGREE * log2(Q) + log2(MAX_SUM) < 256
 
 BASE = 2
-PRECISION_INTEGRAL = 8
-PRECISION_FRACTIONAL = 14
+PRECISION_INTEGRAL = 5
+PRECISION_FRACTIONAL = 13  # 14
 # TODO Gap as needed for local truncating
 
 # We need room for double precision before truncating.
@@ -1045,7 +1045,7 @@ class PrivateEncodedTensor:
 
         # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
         xn = PrivateEncodedTensor.from_values(initial2)
-        for i in range(6):
+        for i in range(4):
             xn_1 = (xn + (a / xn)) / 2
             xn = xn_1
 
