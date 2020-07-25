@@ -81,21 +81,43 @@ class BatchNorm(Layer):
         norm: for every value: minus mean and divide by root of var plus epsilon
         sqrt: Newton method for approximating
         """
-        denom = 1 / x.shape[0]
-        batch_mean = x.sum(axis=0) * denom  # tested with Tensors and seems like it works
+        denom = 1 / x.shape[-1]  # mean in channel dimension
+        batch_mean = x.sum(axis=-1) * denom  # tested with Tensors and seems like it works
         self.moving_mean = batch_mean  # keep track for use in prediction
 
         batch_var_sum = (x - batch_mean).square()
-        batch_var = batch_var_sum.sum(axis=0) * denom  # tested against plaintext and same to 3dp
+        batch_var = batch_var_sum.sum(axis=-1) * denom  # tested against plaintext and same to 3dp
                                                        # (slightly off due to truncation?)
         self.moving_var = batch_var
 
         numerator = x - batch_mean
         denominator = (batch_var + self.epsilon).sqrt()
-        norm = numerator * denominator.inv()
+        denom_inv = denominator.inv()
+        norm = numerator * denom_inv
         bn_approx = norm * self.gamma + self.beta
+        self.cache = numerator, denominator, norm, self.gamma, denom_inv
 
         return bn_approx
+
+    def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
+        N, D = d_y.shape[1], d_y.shape[2]
+
+        numerator, denominator, norm, gamma, denom_inv = self.cache
+        d_gamma = (d_y * norm).sum(axis=-1)  # dL/dgamma = dL/dy * dy/dgamma
+        d_beta = d_y.sum(axis=-1)   # TODO: not sure about axis
+
+        d_norm = d_y * gamma
+        # d_num = d_norm * denom_inv
+        # d_dinv = d_norm * numerator
+        # d_mean1 = d_norm * d_dinv
+        # d_denom = d_dinv *
+        d_x = (1/N) / (denominator * (N * d_norm - d_norm.sum(axis=-1) - norm * (d_norm * norm).sum(axis=-1)))
+
+        self.gamma = (d_gamma * learning_rate).neg() + self.gamma
+        self.beta = (d_beta * learning_rate).neg() + self.beta
+
+        return d_x
+
 
 
 class SigmoidExact(Layer):
