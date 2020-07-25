@@ -2,9 +2,11 @@ import random
 import numpy as np
 from math import log
 from im2col.im2col import im2col_indices, col2im_indices
+
 try:
     from im2col.im2col_cython_float import im2col_cython_float, col2im_cython_float
     from im2col.im2col_cython_object import im2col_cython_object, col2im_cython_object
+
     use_cython = True
 except ImportError as e:
     im2col_cython_float, col2im_cython_float = None, None
@@ -29,10 +31,10 @@ def col2im(x, imshape, field_height, field_width, padding, stride):
     if use_cython:
         if x.dtype == np.dtype('float64'):
             return col2im_cython_float(x, imshape[0], imshape[1], imshape[2], imshape[3],
-                                                field_height, field_width, padding, stride)
+                                       field_height, field_width, padding, stride)
         else:
             return col2im_cython_object(x, imshape[0], imshape[1], imshape[2], imshape[3],
-                                              field_height, field_width, padding, stride)
+                                        field_height, field_width, padding, stride)
     else:
         return col2im_indices(x, imshape, field_height, field_width, padding, stride)
 
@@ -94,10 +96,14 @@ class NativeTensor:
         return x.add(y)
 
     def __iadd__(self, y):
-        if isinstance(y, NativeTensor): self.values = self.values + y.values
-        elif isinstance(y, PublicEncodedTensor): return PublicEncodedTensor.from_values(self.values).add(y)
-        elif isinstance(y, PrivateEncodedTensor): return PublicEncodedTensor.from_values(self.values).add(y)
-        else: raise TypeError("does not support %s" % (type(y)))
+        if isinstance(y, NativeTensor):
+            self.values = self.values + y.values
+        elif isinstance(y, PublicEncodedTensor):
+            return PublicEncodedTensor.from_values(self.values).add(y)
+        elif isinstance(y, PrivateEncodedTensor):
+            return PublicEncodedTensor.from_values(self.values).add(y)
+        else:
+            raise TypeError("does not support %s" % (type(y)))
         return self
 
     def add_at(self, indices, y):
@@ -163,7 +169,7 @@ class NativeTensor:
 
     def transpose(x, *axes):
         return NativeTensor(x.values.transpose(*axes))
-        
+
     def copy(x):
         return NativeTensor(x.values.copy())
 
@@ -214,10 +220,11 @@ class NativeTensor:
 
 
 DTYPE = 'object'
-#Q = 2657003489534545107915232808830590043  # prime
-#Q = 2658455991569831745807614120560689152  # 2**121
+# Q = 2657003489534545107915232808830590043  # prime
+# Q = 2658455991569831745807614120560689152  # 2**121
 two_exp = 121
 Q = 2 ** two_exp
+
 
 # For arbitrary precision integers.
 def log2(x):
@@ -235,7 +242,7 @@ PRECISION_FRACTIONAL = 14
 # TODO Gap as needed for local truncating
 
 # We need room for double precision before truncating.
-#assert PRECISION_INTEGRAL + 2 * PRECISION_FRACTIONAL < log(Q) / log(BASE)
+# assert PRECISION_INTEGRAL + 2 * PRECISION_FRACTIONAL < log(Q) / log(BASE)
 
 COMMUNICATION_ROUNDS = 0
 COMMUNICATED_VALUES = 0
@@ -313,7 +320,7 @@ class PublicEncodedTensor:
         positive_numbers = (self.elements <= Q // 2).astype(int)
         elements = self.elements
         elements = (Q + (2 * positive_numbers - 1) * elements) % Q  # x if x <= Q//2 else Q - x
-        elements = np.floor_divide(elements, BASE ** amount)        # x // BASE**amount
+        elements = np.floor_divide(elements, BASE ** amount)  # x // BASE**amount
         elements = (Q + (2 * positive_numbers - 1) * elements) % Q  # x if x <= Q//2 else Q - x
         return PublicEncodedTensor.from_elements(elements.astype(DTYPE))
 
@@ -421,7 +428,6 @@ class PublicEncodedTensor:
     def col2im(x, imshape, field_height, field_width, padding, stride):
         return PublicEncodedTensor.from_elements(
             col2im(x.elements, imshape, field_height, field_width, padding, stride))
-
 
 
 class PublicFieldTensor:
@@ -634,7 +640,6 @@ class PrivateFieldTensor:
 
     def conv2d(x, y, strides, padding):
         if isinstance(y, PublicFieldTensor):
-
             # shapes, assuming NCHW
             h_filter, w_filter, d_filters, n_filters = y.shape
             n_x, d_x, h_x, w_x = x.shape
@@ -753,7 +758,7 @@ def generate_conv_pool_bw_triple(xshape, yshape, pool_size, n_filter, shares_a=N
         b = shares_b.reveal(count_communication=False).elements
 
     if shares_b_expanded is None:
-        b_expanded = b.repeat(pool_size[0], axis=2).repeat(pool_size[1], axis=3).transpose(1, 2, 3, 0)\
+        b_expanded = b.repeat(pool_size[0], axis=2).repeat(pool_size[1], axis=3).transpose(1, 2, 3, 0) \
             .reshape(n_filter, -1)
         shares_b_expanded = PrivateFieldTensor.from_elements(b_expanded)
     else:
@@ -1015,14 +1020,14 @@ class PrivateEncodedTensor:
         if isinstance(y, NativeTensor): return x.mul(y.inv())
         if isinstance(y, PublicEncodedTensor): return x.mul(y.inv())
         if isinstance(y, PrivateEncodedTensor):  # WORKS!!!
-            #alpha = y.pow_range()
-            w0 = (y*2 - 2.9142).neg()
-            e0 = (y*w0 - 1).neg()
+            # alpha = y.pow_range()
+            w0 = (y * 2 - 2.9142).neg()
+            e0 = (y * w0 - 1).neg()
             e1 = e0.square()
             e2 = e1.square()
 
             out = x * w0 * (e0 + 1) * (e1 + 1) * (e2 + 1)
-            #out2 = out * 2**(- alpha)
+            # out2 = out * 2**(- alpha)
 
             return out
         raise TypeError("%s does not support %s" % (type(x), type(y)))
@@ -1032,30 +1037,29 @@ class PrivateEncodedTensor:
         TODO: Different methods for training and classification
         4 rounds for SecureNN
         """
-        #alpha = a.pow_range()
-        #initial = 2**(int(alpha.values()/2))
-        #initial = 0.5  # WORKS!!!
+        # alpha = a.pow_range()
+        # initial = 2**(int(alpha.values()/2))
+        # initial = 0.5  # WORKS!!!
         initial = a * (-0.8099868542) + 1.787727479
         initial2 = initial.reveal().inv().values  # WORKS!!!
 
-        #xn = PrivateEncodedTensor.from_values(np.array([initial2]))
+        # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
         xn = PrivateEncodedTensor.from_values(initial2)
-        for i in range(4):
+        for i in range(6):
             xn_1 = (xn + (a / xn)) / 2
             xn = xn_1
 
         return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)
 
-    def pow_range(x):
-        a = 0
-        for i in range(two_exp, 0, -1):
-            d1 = 2**i + a
-            d = x - 2**d1
-            c = d.reveal()  # nativetensor
-            if c > 0:
-                x = d
-                a += 2**i
-        return a
+    def inv(self):  # WORKS - decent accuracy but error may accumulate quickly
+        w0 = (self * 2 - 2.9142).neg()
+        e0 = (self * w0 - 1).neg()
+        e1 = e0.square()
+        e2 = e1.square()
+
+        out = w0 * (e0 + 1) * (e1 + 1) * (e2 + 1)  # ~1/self
+
+        return PrivateEncodedTensor.from_shares(out.shares0, out.shares1)
 
     def __truediv__(x, y):
         return x.div(y)
@@ -1112,7 +1116,6 @@ class PrivateEncodedTensor:
         shares0 = col2im(x.shares0, imshape, field_height, field_width, padding, stride)
         shares1 = col2im(x.shares1, imshape, field_height, field_width, padding, stride)
         return PrivateEncodedTensor.from_shares(shares0, shares1)
-
 
 
 ANALYTIC_STORE = []

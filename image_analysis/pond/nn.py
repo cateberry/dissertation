@@ -53,19 +53,24 @@ class Dense(Layer):
         return d_x
 
 
-import tensorflow as tf
-import keras
-
-
 class BatchNorm(Layer):
     def __init__(self):
         self.cache = None
         self.epsilon = 2 ** -10
-        # TODO: implement batch size parameter
+        self.beta = None
+        self.gamma = None
+        self.moving_mean = None
+        self.moving_var = None
+        self.initializer = None
 
-    @staticmethod
-    def initialize(input_shape, **_):
-        return input_shape
+    def initialize(self, input_shape, initializer=None, **_):
+        if initializer is not None:  # TODO: this might not work
+            weight_shape = [input_shape[-1], ]
+            self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
+            self.beta = initializer(np.zeros(weight_shape))   # initialise shift parameter at 0
+            self.moving_mean = initializer(np.zeros(weight_shape))
+            self.moving_var = initializer(np.zeros(weight_shape))
+        return input_shape  # shape doesn't change after BN
 
     def forward(self, x):
         """
@@ -78,17 +83,19 @@ class BatchNorm(Layer):
         """
         denom = 1 / x.shape[0]
         batch_mean = x.sum(axis=0) * denom  # tested with Tensors and seems like it works
+        self.moving_mean = batch_mean  # keep track for use in prediction
 
         batch_var_sum = (x - batch_mean).square()
         batch_var = batch_var_sum.sum(axis=0) * denom  # tested against plaintext and same to 3dp
                                                        # (slightly off due to truncation?)
+        self.moving_var = batch_var
 
         numerator = x - batch_mean
         denominator = (batch_var + self.epsilon).sqrt()
+        norm = numerator * denominator.inv()
+        bn_approx = norm * self.gamma + self.beta
 
-
-
-        return
+        return bn_approx
 
 
 class SigmoidExact(Layer):
