@@ -107,8 +107,8 @@ class BatchNorm(Layer):
         N, D = d_y.shape[-2], d_y.shape[-1]
 
         numerator, denominator, norm, gamma, denom_inv = self.cache
-        d_gamma = (d_y * norm).sum(axis=1)  # dL/dgamma = dL/dy * dy/dgamma
-        d_beta = d_y.sum(axis=1)   # TODO: not sure about axis
+        d_gamma = (d_y * norm).sum(axis=1).expand_dims(axis=1)  # dL/dgamma = dL/dy * dy/dgamma
+        d_beta = d_y.sum(axis=1).expand_dims(axis=1)   # TODO: not sure about axis
 
         d_norm = d_y * gamma
         # d_num = d_norm * denom_inv
@@ -120,6 +120,7 @@ class BatchNorm(Layer):
         d_x3 = norm * (d_norm * norm).sum(axis=1).expand_dims(axis=1)
         d_x4 = denominator * (d_x1 - d_x2 - d_x3)
         d_x = d_x4.inv() * (1 / N)
+        # TODO: put back into one line to save memory
 
         #  (denominator * (d_norm * N - d_norm.sum(axis=1) - norm * (d_norm * norm).sum(axis=1))).inv() * (1/N)
 

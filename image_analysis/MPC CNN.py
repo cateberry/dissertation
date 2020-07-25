@@ -81,8 +81,13 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-tensortype = PrivateEncodedTensor
-batch_size = 128
+# x_train = x_train[:256]
+# y_train = y_train[:256]
+# x_test = x_test[:256]
+# y_test = y_test[:256]
+
+tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
+batch_size = 32
 input_shape = [batch_size] + list(x_train.shape[1:])
 epochs = 1
 learning_rate = 0.01
