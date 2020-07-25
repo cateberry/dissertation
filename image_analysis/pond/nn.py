@@ -74,24 +74,17 @@ class BatchNorm(Layer):
 
     def forward(self, x):
         """
-        per mini-batch: mean, variance (std), normalise, scale and shift
-        x is a tensor, 4D, 1st dim is batch_size
-        mean (private): add every value in mini-batch, divide by size, i.e. multiply by 1/batch_size
-        var (private): for every value: minus mean and square result; sum results and divide by size
-        norm: for every value: minus mean and divide by root of var plus epsilon
-        sqrt: Newton method for approximating
-
-        # TODO: BCHW correct?
+        TODO: BCHW correct?
         """
         denom = 1 / x.shape[1]  # mean in channel dimension
-        batch_mean = x.sum(axis=1) * denom  # tested with Tensors and seems like it works
-        batch_mean = batch_mean.expand_dims(axis=1)
+        batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
+        # atch_mean = batch_mean.expand_dims(axis=1)
         # self.moving_mean = batch_mean  # TODO: keep track for use in prediction
 
         batch_var_sum = (x - batch_mean).square()
-        batch_var = batch_var_sum.sum(axis=1) * denom  # tested against plaintext and same to 3dp
+        batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
                                                        # (slightly off due to truncation?)
-        batch_var = batch_var.expand_dims(axis=1)
+        # batch_var = batch_var.expand_dims(axis=1)
         # self.moving_var = batch_var
 
         numerator = x - batch_mean
@@ -107,22 +100,18 @@ class BatchNorm(Layer):
         N, D = d_y.shape[-2], d_y.shape[-1]
 
         numerator, denominator, norm, gamma, denom_inv = self.cache
-        d_gamma = (d_y * norm).sum(axis=1).expand_dims(axis=1)  # dL/dgamma = dL/dy * dy/dgamma
-        d_beta = d_y.sum(axis=1).expand_dims(axis=1)   # TODO: not sure about axis
+        d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  #.expand_dims(axis=1)  # dL/dgamma = dL/dy * dy/dgamma
+        d_beta = d_y.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)   # TODO: not sure about axis
 
         d_norm = d_y * gamma
-        # d_num = d_norm * denom_inv
-        # d_dinv = d_norm * numerator
-        # d_mean1 = d_norm * d_dinv
-        # d_denom = d_dinv *
-        d_x1 = d_norm * N
-        d_x2 = d_norm.sum(axis=1).expand_dims(axis=1)
-        d_x3 = norm * (d_norm * norm).sum(axis=1).expand_dims(axis=1)
-        d_x4 = denominator * (d_x1 - d_x2 - d_x3)
-        d_x = d_x4.inv() * (1 / N)
+        # d_x1 = d_norm * N
+        # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+        # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+        # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
+        # d_x = d_x4.inv() * (1 / N)
         # TODO: put back into one line to save memory
 
-        #  (denominator * (d_norm * N - d_norm.sum(axis=1) - norm * (d_norm * norm).sum(axis=1))).inv() * (1/N)
+        d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1, keepdims=True))).inv() * (1/N)
 
         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
         self.beta = (d_beta * learning_rate).neg() + self.beta
