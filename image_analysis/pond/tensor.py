@@ -254,7 +254,7 @@ def encode(rationals):
 
 
 def decode(elements):
-    map_negative_range = np.vectorize(lambda element: element if element <= Q / 2 else element - Q)
+    map_negative_range = np.vectorize(lambda element: element if element <= Q / 2 else element - Q, otypes=['int64'])
     return map_negative_range(elements) / BASE ** PRECISION_FRACTIONAL
 
 
