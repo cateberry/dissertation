@@ -64,22 +64,22 @@ class BatchNorm(Layer):
         self.initializer = None
 
     def initialize(self, input_shape, initializer=None, **_):
-        if initializer is not None:  # TODO: this might not work
+        if initializer is not None:
             weight_shape = [input_shape[-1], ]
             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
-            self.beta = initializer(np.zeros(weight_shape))   # initialise shift parameter at 0
+            self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
             self.moving_mean = initializer(np.zeros(weight_shape))
-            self.moving_var = initializer(np.zeros(weight_shape))   # TODO: cost/benefit analysis
+            self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
         return input_shape  # shape doesn't change after BN
 
     def forward(self, x, prediction=False):
         """
-        TODO: BCHW correct?
+        Batch norm forward pass with separate methods for training and classification
         """
         if not prediction:
             denom = 1 / x.shape[1]  # mean in channel dimension
             batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-            self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # TODO: keep track for use in prediction
+            self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
 
             batch_var_sum = (x - batch_mean).square()
             batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
@@ -93,7 +93,7 @@ class BatchNorm(Layer):
             self.cache = numerator, denominator, norm, self.gamma, denom_inv
 
             return bn_approx
-        else:   # TODO: test prediction
+        else:  # TODO: test prediction
             batch_mean = self.moving_mean
             batch_var = self.moving_var
 
@@ -120,7 +120,9 @@ class BatchNorm(Layer):
         # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
         # d_x = d_x4.inv() * (1 / N)
 
-        d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1, keepdims=True))).inv() * (1/N)
+        d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
+                                                                                                          keepdims=True))).inv() * (
+                          1 / N)
 
         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
         self.beta = (d_beta * learning_rate).neg() + self.beta
@@ -222,7 +224,6 @@ class Softmax(Layer):
         return probs
 
     def backward(self, d_probs, _):
-        # TODO does the split between Softmax and CrossEntropy make sense?
         probs = self.cache
         batch_size = probs.shape[0]
         d_scores = probs - d_probs
@@ -294,6 +295,53 @@ class Relu(Layer):
     def compute_coefficients_relu(order, domain, n):
         assert domain[0] < 0 < domain[1]
         x = np.linspace(domain[0], domain[1], n)
+        y = (x > 0) * x
+        return np.polyfit(x, y, order)
+
+
+class ReluNormal(Layer):
+
+    def __init__(self, order=3, mu=0.0, sigma=1.0, n=1000):
+        self.cache = None
+        self.n_coeff = order + 1
+        self.order = order
+        self.coeff = NativeTensor(self.compute_coeffs_normal(order, mu, sigma, n))
+        self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
+        self.initializer = None
+        assert order > 2
+
+    @staticmethod
+    def initialize(input_shape, **_):
+        return input_shape
+
+    def forward(self, x, prediction=False):
+        self.initializer = type(x)
+
+        n_dims = len(x.shape)
+
+        powers = [x, x.square()]
+        for i in range(self.order - 2):
+            powers.append(x * powers[-1])
+
+        # stack list into tensor
+        forward_powers = stack(powers).flip(axis=n_dims)
+        y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+
+        # cache all powers except the last
+        self.cache = stack(powers[:-1]).flip(axis=n_dims)
+        return y
+
+    def backward(self, d_y, _):
+        # the powers of the forward phase: x^1 ...x^order-1
+        powers = self.cache
+        c = d_y * self.coeff_der[-1]
+        d_y.expand_dims(axis=-1)
+        d_x = (d_y * powers).dot(self.coeff_der[:-1]) + c
+        return d_x
+
+    @staticmethod
+    def compute_coeffs_normal(order, mu, sigma, n):
+        x = np.random.normal(mu, sigma, n)
         y = (x > 0) * x
         return np.polyfit(x, y, order)
 

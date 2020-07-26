@@ -239,7 +239,6 @@ assert MAX_DEGREE * log2(Q) + log2(MAX_SUM) < 256
 BASE = 2
 PRECISION_INTEGRAL = 5
 PRECISION_FRACTIONAL = 13  # 14
-# TODO Gap as needed for local truncating
 
 # We need room for double precision before truncating.
 # assert PRECISION_INTEGRAL + 2 * PRECISION_FRACTIONAL < log(Q) / log(BASE)
@@ -344,7 +343,7 @@ class PublicEncodedTensor:
     def sub(x, y):
         y = wrap_if_needed(y)
         if isinstance(y, PublicEncodedTensor): return PublicEncodedTensor.from_elements((x.elements - y.elements) % Q)
-        if isinstance(y, PrivateEncodedTensor): return x.add(y.neg())  # TODO there might be a more efficient way
+        if isinstance(y, PrivateEncodedTensor): return x.add(y.neg())
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
     def __sub__(x, y):
@@ -1021,18 +1020,18 @@ class PrivateEncodedTensor:
         if isinstance(y, PublicEncodedTensor): return x.mul(y.inv())
         if isinstance(y, PrivateEncodedTensor):  # WORKS!!!
             # alpha = y.pow_range()
-            w0 = (y * 2 - 2.9142).neg()
-            e0 = (y * w0 - 1).neg()
+            w0 = (y * 2.0 - 2.9142).neg()
+            e0 = (y * w0 - 1.0).neg()
             e1 = e0.square()
             e2 = e1.square()
 
-            out = x * w0 * (e0 + 1) * (e1 + 1) * (e2 + 1)
+            out = x * w0 * (e0 + 1.0) * (e1 + 1.0) * (e2 + 1.0)
             # out2 = out * 2**(- alpha)
 
             return out
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
-    def sqrt(a, initial=None):
+    def sqrt(a):
         """
         Newton's method for approximation
         """
@@ -1044,21 +1043,18 @@ class PrivateEncodedTensor:
         # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
         xn = PrivateEncodedTensor.from_values(initial2)
         for i in range(4):
-            xn_1 = (xn + (a / xn)) / 2
+            xn_1 = (xn + (a / xn)) / 2.0
             xn = xn_1
 
         return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)
 
-    def inv_sqrt(a, initial=None):
-        """
-        Newton's method for approximation
-        """
+    def inv_sqrt(a):
         initial = a * (-0.8099868542) + 1.787727479
         initial2 = initial.reveal().values  # TODO: make private...
 
         xn = PrivateEncodedTensor.from_values(initial2)
         for i in range(4):
-            xn_1 = (xn / 2) * ((a * xn.square()).neg() + 3)
+            xn_1 = (xn / 2.0) * ((a * xn.square()).neg() + 3.0)
             xn = xn_1
 
         return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)
