@@ -35,13 +35,13 @@ pool_size = (2, 2)
 #kernel_size = (5, 5, 1, 16)
 
 convnet_shallow = Sequential([
-    Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
+    Conv2D((3, 3, 1, 16), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
     Relu(order=3),  # Conv Act Pool ?
     AveragePooling2D(pool_size=(2, 2)),
     #Square(),
     Flatten(),
-    Dense(10, 6272),
+    Dense(10, 3136),
     Reveal(),
     SoftmaxStable()
 ])
@@ -81,15 +81,15 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-# x_train = x_train[:256]
-# y_train = y_train[:256]
-# x_test = x_test[:256]
-# y_test = y_test[:256]
+x_train = x_train[:256]
+y_train = y_train[:256]
+x_test = x_test[:256]
+y_test = y_test[:256]
 
 tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
 batch_size = 32
 input_shape = [batch_size] + list(x_train.shape[1:])
-epochs = 1
+epochs = 3
 learning_rate = 0.01
 
 convnet_shallow.initialize(initializer=tensortype, input_shape=input_shape)
@@ -120,7 +120,7 @@ print("Elapsed time: ", time_taken)
 # y_train = y_train[:256]
 # x_test = x_test[:256]
 # y_test = y_test[:256]
-
+raise Exception()
 tensortype = PublicEncodedTensor
 epochs = 1
 learning_rate = 0.01
