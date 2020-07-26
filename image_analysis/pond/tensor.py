@@ -1033,20 +1033,32 @@ class PrivateEncodedTensor:
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
     def sqrt(a, initial=None):
-        """Newton's method for approximation
-        TODO: Different methods for training and classification
-        4 rounds for SecureNN
         """
-        # alpha = a.pow_range()
+        Newton's method for approximation
+        """
         # initial = 2**(int(alpha.values()/2))
         # initial = 0.5  # WORKS!!!
         initial = a * (-0.8099868542) + 1.787727479
-        initial2 = initial.reveal().inv().values  # WORKS!!!
+        initial2 = initial.reveal().inv().values  # WORKS  # TODO: make private...
 
         # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
         xn = PrivateEncodedTensor.from_values(initial2)
         for i in range(4):
             xn_1 = (xn + (a / xn)) / 2
+            xn = xn_1
+
+        return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)
+
+    def inv_sqrt(a, initial=None):
+        """
+        Newton's method for approximation
+        """
+        initial = a * (-0.8099868542) + 1.787727479
+        initial2 = initial.reveal().values  # TODO: make private...
+
+        xn = PrivateEncodedTensor.from_values(initial2)
+        for i in range(4):
+            xn_1 = (xn / 2) * ((a * xn.square()).neg() + 3)
             xn = xn_1
 
         return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)

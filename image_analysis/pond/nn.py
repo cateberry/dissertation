@@ -33,7 +33,7 @@ class Dense(Layer):
         output_shape = [input_shape[0]] + [self.num_nodes]
         return output_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         y = x.dot(self.weights) + self.bias
         self.cache = x
         return y
@@ -69,47 +69,56 @@ class BatchNorm(Layer):
             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
             self.beta = initializer(np.zeros(weight_shape))   # initialise shift parameter at 0
             self.moving_mean = initializer(np.zeros(weight_shape))
-            self.moving_var = initializer(np.zeros(weight_shape))
+            self.moving_var = initializer(np.zeros(weight_shape))   # TODO: cost/benefit analysis
         return input_shape  # shape doesn't change after BN
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         """
         TODO: BCHW correct?
         """
-        denom = 1 / x.shape[1]  # mean in channel dimension
-        batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-        # atch_mean = batch_mean.expand_dims(axis=1)
-        # self.moving_mean = batch_mean  # TODO: keep track for use in prediction
+        if not prediction:
+            denom = 1 / x.shape[1]  # mean in channel dimension
+            batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
+            self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # TODO: keep track for use in prediction
 
-        batch_var_sum = (x - batch_mean).square()
-        batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
-                                                       # (slightly off due to truncation?)
-        # batch_var = batch_var.expand_dims(axis=1)
-        # self.moving_var = batch_var
+            batch_var_sum = (x - batch_mean).square()
+            batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
+            self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
 
-        numerator = x - batch_mean
-        denominator = (batch_var + self.epsilon).sqrt()
-        denom_inv = denominator.inv()
-        norm = numerator * denom_inv
-        bn_approx = norm * self.gamma + self.beta
-        self.cache = numerator, denominator, norm, self.gamma, denom_inv
+            numerator = x - batch_mean
+            denominator = (batch_var + self.epsilon).sqrt()
+            denom_inv = denominator.inv()
+            norm = numerator * denom_inv
+            bn_approx = norm * self.gamma + self.beta
+            self.cache = numerator, denominator, norm, self.gamma, denom_inv
 
-        return bn_approx
+            return bn_approx
+        else:   # TODO: test prediction
+            batch_mean = self.moving_mean
+            batch_var = self.moving_var
+
+            numerator = x - batch_mean
+            denominator = (batch_var + self.epsilon).inv_sqrt()
+
+            norm = numerator * denominator
+            bn_approx = norm * self.gamma + self.beta
+
+            return bn_approx
 
     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
         N, D = d_y.shape[-2], d_y.shape[-1]
 
         numerator, denominator, norm, gamma, denom_inv = self.cache
-        d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  #.expand_dims(axis=1)  # dL/dgamma = dL/dy * dy/dgamma
-        d_beta = d_y.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)   # TODO: not sure about axis
+        d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  # dL/dgamma = dL/dy * dy/dgamma
+        d_beta = d_y.sum(axis=1, keepdims=True)
 
         d_norm = d_y * gamma
+        # For debugging:
         # d_x1 = d_norm * N
         # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
         # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
         # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
         # d_x = d_x4.inv() * (1 / N)
-        # TODO: put back into one line to save memory
 
         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1, keepdims=True))).inv() * (1/N)
 
@@ -127,7 +136,7 @@ class SigmoidExact(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         y = (x.neg().exp() + 1).inv()
         self.cache = y
         return y
@@ -147,7 +156,7 @@ class Sigmoid(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         w0 = 0.5
         w1 = 0.2159198015
         w3 = -0.0082176259
@@ -181,7 +190,7 @@ class SoftmaxStable(Layer):
         self.cache = None
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         # we add the - x.max() for numerical stability, i.e. to prevent overflow
         likelihoods = (x - x.max(axis=1, keepdims=True)).clip(-10.0, np.inf).exp()
         probs = likelihoods.div(likelihoods.sum(axis=1, keepdims=True))
@@ -206,7 +215,7 @@ class Softmax(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         exp = x.exp()
         probs = exp.div(exp.sum(axis=1, keepdims=True))
         self.cache = probs
@@ -230,7 +239,7 @@ class ReluExact(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         y = x * (x > 0)
         self.cache = x
         return y
@@ -256,7 +265,7 @@ class Relu(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         self.initializer = type(x)
 
         n_dims = len(x.shape)
@@ -297,7 +306,7 @@ class Square(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         y = x.square()
         self.cache = x
         return y
@@ -316,7 +325,7 @@ class Dropout(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         pass
 
     def backward(self, dx):
@@ -331,7 +340,7 @@ class Flatten(Layer):
     def initialize(input_shape, **_):
         return [input_shape[0]] + [np.prod(input_shape[1:])]
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         self.shape = x.shape
         y = x.reshape(x.shape[0], -1)
         return y
@@ -377,7 +386,7 @@ class Conv2D:
 
         return [n_x, n_filters, h_out, w_out]
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         self.cached_input_shape = x.shape
         self.cache = x
         out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
@@ -430,7 +439,7 @@ class AveragePooling2D:
         s = (input_shape[2] - self.pool_size[0]) // self.strides + 1
         return input_shape[:2] + [s, s]
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         # forward pass of average pooling, assumes NCHW data format
         s = (x.shape[2] - self.pool_size[0]) // self.strides + 1
         self.initializer = type(x)
@@ -499,7 +508,7 @@ class ConvAveragePooling2D:
 
         return [n_x, n_filters, s, s]
 
-    def forward(self, x):
+    def forward(self, x, prediction=False):
         self.initializer = type(x)
         self.cached_input_shape = x.shape
         self.cache = x
@@ -552,7 +561,7 @@ class Reveal(Layer):
         return input_shape
 
     @staticmethod
-    def forward(x):
+    def forward(x, prediction=False):
         return x.reveal()
 
     @staticmethod
@@ -814,6 +823,7 @@ class Sequential(Model):
         if layers is None:
             layers = []
         self.layers = layers
+        self.prediction = False
 
     def initialize(self, input_shape, initializer, **_):
         for layer in self.layers:
@@ -821,7 +831,7 @@ class Sequential(Model):
 
     def forward(self, x):
         for layer in self.layers:
-            x = layer.forward(x)
+            x = layer.forward(x, prediction=self.prediction)
         return x
 
     def backward(self, d_y, learning_rate):
@@ -907,8 +917,10 @@ class Sequential(Model):
     def predict(self, x, batch_size=32, verbose=0):
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
+        self.prediction = True
         for batch_index, x_batch in enumerate(x.batches(batch_size)):
             if verbose >= 2: print(datetime.now(), "Batch %s" % batch_index)
             y_batch = self.forward(x_batch)
             batches.append(y_batch)
+        self.prediction = False
         return reduce(lambda x_, y: x_.concatenate(y), batches)
