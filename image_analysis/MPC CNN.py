@@ -3,7 +3,7 @@ import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
 from pond.nn import Dense, ReluExact, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, ConvAveragePooling2D, Square, BatchNorm
+    AveragePooling2D, Flatten, ConvAveragePooling2D, Square, BatchNorm, BatchNormTest, ReluNormal
 from keras.utils import to_categorical
 
 np.random.seed(42)
@@ -35,13 +35,13 @@ pool_size = (2, 2)
 #kernel_size = (5, 5, 1, 16)
 
 convnet_shallow = Sequential([
-    Conv2D((3, 3, 1, 16), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
-    BatchNorm(),
-    Relu(order=3),  # Conv Act Pool ?
+    Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
+    BatchNormTest(),
+    ReluNormal(order=3),  # Conv Act Pool ?
     AveragePooling2D(pool_size=(2, 2)),
     #Square(),
     Flatten(),
-    Dense(10, 3136),
+    Dense(10, 6272),
     Reveal(),
     SoftmaxStable()
 ])
@@ -89,7 +89,7 @@ y_test = y_test[:256]
 tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
 batch_size = 32
 input_shape = [batch_size] + list(x_train.shape[1:])
-epochs = 3
+epochs = 5
 learning_rate = 0.01
 
 convnet_shallow.initialize(initializer=tensortype, input_shape=input_shape)
