@@ -130,6 +130,150 @@ class BatchNorm(Layer):
         return d_x
 
 
+class BatchNormTest2(Layer):
+    def __init__(self):
+        self.cache = None
+        self.epsilon = 2 ** -10
+        self.beta = None
+        self.gamma = None
+        self.moving_mean = None
+        self.moving_var = None
+        self.initializer = None
+
+    def initialize(self, input_shape, initializer=None, **_):
+        if initializer is not None:
+            weight_shape = [input_shape[-1], ]
+            self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
+            self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
+            self.moving_mean = initializer(np.zeros(weight_shape))
+            self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
+        return input_shape  # shape doesn't change after BN
+
+    def forward(self, x, prediction=False):
+        """
+        Batch norm forward pass with separate methods for training and classification
+        """
+        if not prediction:
+            denom = 1 / x.shape[1]  # mean in channel dimension
+            batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
+            self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
+
+            batch_var_sum = (x - batch_mean).square()
+            batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
+            self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
+
+            numerator = x - batch_mean
+            denominator = (batch_var + self.epsilon).sqrt()
+            denom_inv = denominator.inv()
+            norm = numerator * denom_inv
+            bn_approx = norm * self.gamma + self.beta
+            self.cache = numerator, denominator, norm, self.gamma, denom_inv
+
+            return bn_approx
+        else:  # TODO: test prediction
+            batch_mean = self.moving_mean
+            batch_var = self.moving_var
+
+            numerator = x - batch_mean
+            denominator = (batch_var + self.epsilon).inv_sqrt()
+
+            norm = numerator * denominator
+            bn_approx = norm * self.gamma + self.beta
+
+            return bn_approx
+
+    def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
+        N, D = d_y.shape[-2], d_y.shape[-1]
+
+        numerator, denominator, norm, gamma, denom_inv = self.cache
+        d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  # dL/dgamma = dL/dy * dy/dgamma
+        d_beta = d_y.sum(axis=1, keepdims=True)
+
+        d_norm = d_y * gamma
+        # For debugging:
+        # d_x1 = d_norm * N
+        # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+        # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+        # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
+        # d_x = d_x4.inv() * (1 / N)
+
+        d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
+                                                                                                          keepdims=True))).inv() * (
+                          1 / N)
+
+        self.gamma = (d_gamma * learning_rate).neg() + self.gamma
+        self.beta = (d_beta * learning_rate).neg() + self.beta
+
+        return d_x
+
+
+class BatchNormTest(Layer):
+    def __init__(self):
+        self.cache = None
+        self.epsilon = 2 ** -10
+        self.beta = None
+        self.gamma = None
+        self.moving_mean = None
+        self.moving_var = None
+        self.initializer = None
+
+    def initialize(self, input_shape, initializer=None, **_):
+        if initializer is not None:
+            weight_shape = [input_shape[-1], ]
+            self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
+            self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
+            self.moving_mean = initializer(np.zeros(weight_shape))
+            self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
+        return input_shape  # shape doesn't change after BN
+
+    def forward(self, x, prediction=False):
+        """
+        Batch norm forward pass
+        """
+
+        denom = 1 / x.shape[1]  # mean in channel dimension
+        batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
+        self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
+
+        batch_var_sum = (x - batch_mean).square()
+        batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
+        self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
+
+        numerator = x - batch_mean
+        denominator = (batch_var + self.epsilon).sqrt()
+        denom_inv = denominator.inv()
+        norm = numerator * denom_inv
+        bn_approx = norm * self.gamma + self.beta
+        self.cache = numerator, denominator, norm, self.gamma, denom_inv
+
+        return bn_approx
+
+
+    def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
+        N, D = d_y.shape[-2], d_y.shape[-1]
+
+        numerator, denominator, norm, gamma, denom_inv = self.cache
+        d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  # dL/dgamma = dL/dy * dy/dgamma
+        d_beta = d_y.sum(axis=1, keepdims=True)
+
+        d_norm = d_y * gamma
+        # For debugging:
+        # d_x1 = d_norm * N
+        # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+        # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+        # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
+        # d_x = d_x4.inv() * (1 / N)
+
+        d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
+                                                                                                          keepdims=True))).inv() * (
+                          1 / N)
+
+        self.gamma = (d_gamma * learning_rate).neg() + self.gamma
+        self.beta = (d_beta * learning_rate).neg() + self.beta
+
+        return d_x
+
+
 class SigmoidExact(Layer):
     def __init__(self):
         self.cache = None
