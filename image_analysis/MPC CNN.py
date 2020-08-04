@@ -3,7 +3,7 @@ import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
 from pond.nn import Dense, ReluExact, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, ConvAveragePooling2D, Square, BatchNorm, BatchNormTest, ReluNormal
+    AveragePooling2D, Flatten, ConvAveragePooling2D, Square, BatchNorm, ReluNormal, BatchNormTest
 from keras.utils import to_categorical
 
 np.random.seed(42)
@@ -30,16 +30,16 @@ y_train = to_categorical(y_train, 10)
 y_test = to_categorical(y_test, 10)
 
 # Size of pooling area for max pooling
-pool_size = (2, 2)
+# pool_size = (2, 2)
 # Convolution kernel size (kernel_height, kernel_width, input_channels, num_filters)
-#kernel_size = (5, 5, 1, 16)
+# kernel_size = (5, 5, 1, 16)
 
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNormTest(),
-    ReluNormal(order=3),  # Conv Act Pool ?
+    ReluNormal(order=4, mu=0.0, sigma=1.0),
+    #Relu(order=4),
     AveragePooling2D(pool_size=(2, 2)),
-    #Square(),
     Flatten(),
     Dense(10, 6272),
     Reveal(),
@@ -47,16 +47,21 @@ convnet_shallow = Sequential([
 ])
 
 convnet = Sequential([
-    Conv2D((3, 3, 1, 32), strides=1, padding=1,
+    Conv2D((5, 5, 1, 1), strides=1, padding=1,
            filter_init=lambda shp: np.random.uniform(low=-0.14, high=0.14, size=shp)),
-    AveragePooling2D(pool_size=pool_size),
-    Relu(order=3),
-    Conv2D((3, 3, 32, 32), strides=1, padding=1,
+    # BatchNormTest(),
+    # ReluNormal(order=3),
+    AveragePooling2D(pool_size=(2,2)),
+    Conv2D((5, 5, 1, 20), strides=1, padding=1,
            filter_init=lambda shp: np.random.uniform(low=-0.1, high=0.1, size=shp)),
-    AveragePooling2D(pool_size=pool_size),
-    Relu(order=3),
+    # BatchNormTest(),
+    # ReluNormal(order=3),
+    AveragePooling2D(pool_size=(2,2)),
     Flatten(),
-    Dense(10, 1568),
+    Dense(500, 500),
+    BatchNormTest(),
+    ReluNormal(order=3),
+    Dense(10, 500),
     Reveal(),
     SoftmaxStable()
 ])
@@ -81,15 +86,15 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-x_train = x_train[:256]
-y_train = y_train[:256]
-x_test = x_test[:256]
-y_test = y_test[:256]
+x_train = x_train[:512]
+y_train = y_train[:512]
+x_test = x_test[:128]
+y_test = y_test[:128]
 
 tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
 batch_size = 32
 input_shape = [batch_size] + list(x_train.shape[1:])
-epochs = 5
+epochs = 3
 learning_rate = 0.01
 
 convnet_shallow.initialize(initializer=tensortype, input_shape=input_shape)
