@@ -221,9 +221,9 @@ class NativeTensor:
 
 DTYPE = 'object'
 # Q = 2657003489534545107915232808830590043  # prime
-# Q = 2658455991569831745807614120560689152  # 2**121
-two_exp = 121
-Q = 2 ** two_exp
+Q = 2658455991569831745807614120560689152  # 2**121
+# two_exp = 121
+# Q = 2 ** two_exp
 
 
 # For arbitrary precision integers.
@@ -237,8 +237,8 @@ MAX_SUM = 2 ** 12
 assert MAX_DEGREE * log2(Q) + log2(MAX_SUM) < 256
 
 BASE = 2
-PRECISION_INTEGRAL = 5
-PRECISION_FRACTIONAL = 13  # 14
+PRECISION_INTEGRAL = 4  # 5
+PRECISION_FRACTIONAL = 12  # 13
 
 # We need room for double precision before truncating.
 # assert PRECISION_INTEGRAL + 2 * PRECISION_FRACTIONAL < log(Q) / log(BASE)
@@ -254,7 +254,7 @@ def encode(rationals):
 
 
 def decode(elements):
-    map_negative_range = np.vectorize(lambda element: element if element <= Q / 2 else element - Q, otypes=['int64'])
+    map_negative_range = np.vectorize(lambda element: element if element <= Q / 2 else element - Q)#, otypes=['object'])
     return map_negative_range(elements) / BASE ** PRECISION_FRACTIONAL
 
 
@@ -1041,6 +1041,10 @@ class PrivateEncodedTensor:
         initial2 = initial.reveal().inv().values  # WORKS  # TODO: make private...
 
         # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
+
+        #initial2 = initial.inv()
+
+        #xn = PrivateEncodedTensor.from_shares(initial2.shares0, initial2.shares1)
         xn = PrivateEncodedTensor.from_values(initial2)
         for i in range(4):
             xn_1 = (xn + (a / xn)) / 2.0
