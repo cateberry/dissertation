@@ -375,6 +375,7 @@ class ReluNormal(Layer):
         self.coeff = NativeTensor(self.compute_coeffs_normal(order, mu, sigma, n))
         self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
         self.initializer = None
+        self.saved_coeffs = []
         assert order > 2
 
     @staticmethod
@@ -406,11 +407,15 @@ class ReluNormal(Layer):
         d_x = (d_y * powers).dot(self.coeff_der[:-1]) + c
         return d_x
 
-    @staticmethod
-    def compute_coeffs_normal(order, mu, sigma, n):
+    def compute_coeffs_normal(self, order, mu, sigma, n):
         x = np.random.normal(mu, sigma, n)
         y = (x > 0) * x
-        return np.polyfit(x, y, order)
+        coeffs = np.polyfit(x, y, order)
+
+        self.saved_coeffs.append(coeffs)
+        print(coeffs)
+
+        return coeffs
 
 
 class Square(Layer):
