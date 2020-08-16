@@ -2,9 +2,10 @@ import keras
 import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
-from pond.nn import Dense, ReluExact, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, ConvAveragePooling2D, Square, BatchNorm, ReluNormal, BatchNormTest
+from pond.nn import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
+    AveragePooling2D, Flatten, BatchNorm, ReluNormal, ReluGalois, Conv2DQuant, DenseQuant
 from keras.utils import to_categorical
+
 
 np.random.seed(42)
 
@@ -22,49 +23,75 @@ _ = np.seterr(invalid='raise')
 """
 
 (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-x_train = x_train.astype('float64')
-x_test = x_test.astype('float64')
+x_train = x_train.astype(np.uint8)
+x_test = x_test.astype(np.uint8)
 x_train = x_train[:, np.newaxis, :, :] / 255.0
 x_test = x_test[:, np.newaxis, :, :] / 255.0
+# x_train = x_train[:, np.newaxis, :, :]
+# x_test = x_test[:, np.newaxis, :, :]
 y_train = to_categorical(y_train, 10)
 y_test = to_categorical(y_test, 10)
+
+"""
+Split into train-test-val
+Train in usual way using train and val
+Write separate function for testing on test set (completely unseen)
+Purpose of testing function is for evaluating quantized network
+Compare testing of quantized network with non-quantized network 
+Need a way to save the parameters of the trained MPC network 
+"""
 
 # Size of pooling area for max pooling
 # pool_size = (2, 2)
 # Convolution kernel size (kernel_height, kernel_width, input_channels, num_filters)
 # kernel_size = (5, 5, 1, 16)
 
+# convnet_shallow_gal = Sequential([
+#     #Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
+#     Conv2DQuant((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
+#     BatchNorm(),
+#     ReluGalois(order=4, mu=0.0, sigma=1.0),     # TODO: investigate overflow error
+#     #Relu(order=4),
+#     AveragePooling2D(pool_size=(2, 2)),
+#     Flatten(),
+#     # Dense(10, 6272),  # 3136 5408 6272
+#     DenseQuant(10, 6272),
+#     Reveal(),
+#     SoftmaxStable()
+# ])
+
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
-    BatchNormTest(),
-    ReluNormal(order=4, mu=0.0, sigma=1.0),
-    #Relu(order=4),
+    BatchNorm(),
+    # ReluNormal(order=4, mu=0.0, sigma=1.0, approx_type='taylor'),
+    # Relu(order=4),
+    ReluGalois(order=4, mu=0.0, sigma=1.0),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
-    Dense(10, 6272),
+    Dense(10, 6272),  # 3136 5408 6272
     Reveal(),
     SoftmaxStable()
 ])
 
-convnet = Sequential([
-    Conv2D((5, 5, 1, 1), strides=1, padding=1,
-           filter_init=lambda shp: np.random.uniform(low=-0.14, high=0.14, size=shp)),
-    # BatchNormTest(),
-    # ReluNormal(order=3),
-    AveragePooling2D(pool_size=(2,2)),
-    Conv2D((5, 5, 1, 20), strides=1, padding=1,
-           filter_init=lambda shp: np.random.uniform(low=-0.1, high=0.1, size=shp)),
-    # BatchNormTest(),
-    # ReluNormal(order=3),
-    AveragePooling2D(pool_size=(2,2)),
-    Flatten(),
-    Dense(500, 500),
-    BatchNormTest(),
-    ReluNormal(order=3),
-    Dense(10, 500),
-    Reveal(),
-    SoftmaxStable()
-])
+# convnet = Sequential([
+#     Conv2D((5, 5, 1, 1), strides=1, padding=1,
+#            filter_init=lambda shp: np.random.uniform(low=-0.14, high=0.14, size=shp)),
+#     # BatchNormTest(),
+#     # ReluNormal(order=3),
+#     AveragePooling2D(pool_size=(2,2)),
+#     Conv2D((5, 5, 1, 20), strides=1, padding=1,
+#            filter_init=lambda shp: np.random.uniform(low=-0.1, high=0.1, size=shp)),
+#     # BatchNormTest(),
+#     # ReluNormal(order=3),
+#     AveragePooling2D(pool_size=(2,2)),
+#     Flatten(),
+#     Dense(500, 500),
+#     BatchNormTest(),
+#     ReluNormal(order=3),
+#     Dense(10, 500),
+#     Reveal(),
+#     SoftmaxStable()
+# ])
 
 
 # %%

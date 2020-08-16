@@ -220,10 +220,10 @@ class NativeTensor:
 
 
 DTYPE = 'object'
-# Q = 2657003489534545107915232808830590043  # prime
-Q = 2658455991569831745807614120560689152  # 2**121
-# two_exp = 121
-# Q = 2 ** two_exp
+#Q = 2657003489534545107915232808830590043  # prime
+#Q = 2658455991569831745807614120560689152  # 2**121
+two_exp = 121
+Q = 2 ** two_exp
 
 
 # For arbitrary precision integers.
@@ -254,7 +254,7 @@ def encode(rationals):
 
 
 def decode(elements):
-    map_negative_range = np.vectorize(lambda element: element if element <= Q / 2 else element - Q)#, otypes=['object'])
+    map_negative_range = np.vectorize(lambda element: element if element <= Q / 2 else element - Q)  #, otypes=['int64'])
     return map_negative_range(elements) / BASE ** PRECISION_FRACTIONAL
 
 
@@ -1007,6 +1007,30 @@ class PrivateEncodedTensor:
             return PrivateEncodedTensor.from_shares(z.shares0, z.shares1).truncate()
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
+    def dot_QG(x, y, QG=Q, precomputed=None, reuse_mask=REUSE_MASK):
+        y = wrap_if_needed(y)
+        if isinstance(y, PublicEncodedTensor):
+            assert x.shape[-1] == y.shape[0]
+            shares0 = x.shares0.dot(y.elements) % QG
+            shares1 = x.shares1.dot(y.elements) % QG
+            return PrivateEncodedTensor.from_shares(shares0, shares1).truncate()
+        if isinstance(y, PrivateEncodedTensor):
+            m, n, o = x.shape[0], x.shape[1], y.shape[1]
+            assert n == y.shape[0]
+            a, b, alpha, beta = None, None, None, None
+            if reuse_mask: a, alpha, b, bet = x.mask, x.masked, y.mask, y.masked
+            if precomputed is None: precomputed = generate_dot_triple(m, n, o, a, b)
+            a, b, ab = precomputed
+            if alpha is None: alpha = (x - a).reveal()
+            if beta is None: beta = (y - b).reveal()
+            z = alpha.dot(beta) + alpha.dot(b) + a.dot(beta) + ab
+            # cache masks
+            if reuse_mask:
+                x.mask, x.masked, y.mask, y.masked = a, alpha, b, beta
+
+            return PrivateEncodedTensor.from_shares(z.shares0, z.shares1).truncate()
+        raise TypeError("%s does not support %s" % (type(x), type(y)))
+
     def square(x):
         a, aa = generate_square_triple(x.shape)
         alpha = (x - a).reveal()
@@ -1041,10 +1065,6 @@ class PrivateEncodedTensor:
         initial2 = initial.reveal().inv().values  # WORKS  # TODO: make private...
 
         # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
-
-        #initial2 = initial.inv()
-
-        #xn = PrivateEncodedTensor.from_shares(initial2.shares0, initial2.shares1)
         xn = PrivateEncodedTensor.from_values(initial2)
         for i in range(4):
             xn_1 = (xn + (a / xn)) / 2.0
