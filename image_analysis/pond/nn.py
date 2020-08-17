@@ -10,6 +10,7 @@ import time
 import pond
 from scipy.interpolate import approximate_taylor_polynomial
 import sympy as sym
+import pickle
 
 
 class Layer:
@@ -544,9 +545,8 @@ class ReluNormal(Layer):
             x = sym.Symbol('x')
             f = (x > 0) * x
             psi, points = Lagrange_polynomials(x, 3, [-3, 3], point_distribution='uniform')
-            u = interpolation(f, psi, points)
-
-
+            u, coeffs = interpolation(f, psi, points)
+        # TODO: test above
         elif approx_type == 'lagrange-chebyshev':
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             y = self.relu(x)
@@ -718,6 +718,11 @@ class Conv2D:
         self.filters = initializer(self.filter_init(self.fshape))
 
         return [n_x, n_filters, h_out, w_out]
+
+    def quantize(self):
+        decrypted_filters = self.filters.reveal()
+        quanted_filters = quant_weights_MPC(decrypted_filters)
+        self.filters = quanted_filters
 
     def forward(self, x):
         self.cached_input_shape = x.shape
@@ -1347,10 +1352,10 @@ class Sequential(Model):
         #                 f, pickle.HIGHEST_PROTOCOL)
         # Newline after progressbar.
         print()
-
+# TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
-        layers_to_quant = [Conv2D.filters, Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
-        self.quantize(layers_to_quant)
+        # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
+        self.quantize()
 
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
@@ -1365,10 +1370,11 @@ class Sequential(Model):
     parameters?)
         Take batch norm parameters from whole of test set? or from whole of training set?
     """
-
-    def quantize(self, layers):
-        # Convert from PrivateEncodedTensors into NativeTensors to allow for quantization
-        for layer in layers:
-            decrypted_layer = layer.reveal()
-            quanted_layer = quant_weights_MPC(decrypted_layer)
-            layer = quanted_layer
+    # TODO: debug and see what happens when quantize is called
+    # TODO: check time taken for evaluation to see if quantization has an effect
+    def quantize(self):
+        for layer in self.layers:
+            try:
+                layer.quantize()
+            except:
+                pass
