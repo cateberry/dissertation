@@ -8,6 +8,7 @@ from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor,
 import math
 import time
 import pond
+import sympy as sym
 
 
 class Layer:
@@ -366,23 +367,97 @@ class Relu(Layer):
         return np.polyfit(x, y, order)
 
 
+
+def interpolation(f, psi, points):
+    N = len(psi) - 1
+    A = sym.zeros((N+1, N+1))
+    b = sym.zeros((N+1, 1))
+    psi_sym = psi  # save symbolic expression
+    # Turn psi and f into Python functions
+    x = sym.Symbol('x')
+    psi = [sym.lambdify([x], psi[i]) for i in range(N+1)]
+    f = sym.lambdify([x], f)
+    for i in range(N+1):
+        for j in range(N+1):
+            A[i,j] = psi[j](points[i])
+        b[i,0] = f(points[i])
+    c = A.LUsolve(b)
+    # c is a sympy Matrix object, turn to list
+    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
+    u = sym.simplify(sum(c[i, 0]*psi_sym[i] for i in range(N+1)))
+    return u, c
+
+
+def least_squares(f, psi, Omega):
+    N = len(psi) - 1
+    A = sym.zeros((N+1, N+1))
+    b = sym.zeros((N+1, 1))
+    x = sym.Symbol('x')
+    for i in range(N+1):
+        for j in range(i, N+1):
+            integrand = psi[i]*psi[j]
+            I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+            if isinstance(I, sym.Integral):
+                # Could not integrate symbolically, fall back
+                # on numerical integration with mpmath.quad
+                integrand = sym.lambdify([x], integrand)
+                I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
+            A[i,j] = A[j,i] = I
+        integrand = psi[i]*f
+        I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+        if isinstance(I, sym.Integral):
+            integrand = sym.lambdify([x], integrand)
+            I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
+        b[i,0] = I
+    c = A.LUsolve(b)
+    c = [sym.simplify(c[i,0]) for i in range(c.shape[0])]
+    u = sum(c[i]*psi[i] for i in range(len(psi)))
+    return u, c
+
+# TODO: make this work
+def Lagrange_polynomial(x, i, points):
+    p = 1
+    for k in range(len(points)):
+        if k != i:
+            p *= (x - points[k]) / (points[i] - points[k])
+    return p
+
+
+def Chebyshev_nodes(a, b, N):
+    from math import cos, pi
+    return [0.5 * (a + b) + 0.5 * (b - a) * cos((float(2 * i + 1) / (2 * N + 1)) * pi) for i in range(N + 1)]
+
+
+def Lagrange_polynomials(x, N, Omega, point_distribution='uniform'):
+    if point_distribution == 'uniform':
+        if isinstance(x, sym.Symbol):
+            h = sym.Rational(Omega[1] - Omega[0], N)
+        else:
+            h = (Omega[1] - Omega[0]) / float(N)
+        points = [Omega[0] + i * h for i in range(N + 1)]
+    elif point_distribution == 'chebyshev':
+        points = Chebyshev_nodes(Omega[0], Omega[1], N)
+    psi = [Lagrange_polynomial(x, i, points) for i in range(N + 1)]
+    return psi, points
+
+
 class ReluNormal(Layer):
 
-    def __init__(self, order=3, mu=0.0, sigma=1.0, n=1000):
+    def __init__(self, order, mu=0.0, sigma=1.0, n=1000, approx_type='regression'):
         self.cache = None
         self.n_coeff = order + 1
         self.order = order
-        self.coeff = NativeTensor(self.compute_coeffs_normal(order, mu, sigma, n))
+        self.saved_coeffs = []
+        self.coeff = NativeTensor(self.compute_coeffs_normal(order, mu, sigma, n, approx_type))
         self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
         self.initializer = None
-        self.saved_coeffs = []
         assert order > 2
 
     @staticmethod
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         self.initializer = type(x)
 
         n_dims = len(x.shape)
@@ -407,12 +482,38 @@ class ReluNormal(Layer):
         d_x = (d_y * powers).dot(self.coeff_der[:-1]) + c
         return d_x
 
-    def compute_coeffs_normal(self, order, mu, sigma, n):
-        x = np.random.normal(mu, sigma, n)
+    @staticmethod
+    def relu(x):
         y = (x > 0) * x
-        coeffs = np.polyfit(x, y, order)
+        return y
 
-        self.saved_coeffs.append(coeffs)
+    def compute_coeffs_normal(self, order, mu, sigma, n, approx_type='regression'):
+        # Sample x from normal distribution
+        x = np.random.normal(mu, sigma, n)
+
+        if approx_type == 'regression':
+            # Fit a polynomial to the sample data (least squares)
+            y = self.relu(x)
+            coeffs = np.polyfit(x, y, order)
+        elif approx_type == 'taylor':
+            # Fit a Taylor polynomial
+            taylor_approx = approximate_taylor_polynomial(self.relu, 0, order, 3)  # TODO: experiment with scale
+            coeffs = taylor_approx.coeffs
+        elif approx_type == 'lagrange-uniform':
+            # Fit a Lagrange polynomial with equidistant points over interval
+            x = sym.Symbol('x')
+            f = (x > 0) * x
+            psi, points = Lagrange_polynomials(x, 3, [-3, 3], point_distribution='uniform')
+            u, coeffs = interpolation(f, psi, points)
+        # TODO: test above
+        elif approx_type == 'lagrange-chebyshev':
+            # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
+            y = self.relu(x)
+            coeffs = Lagrange_polynomials(y, 3, (-3, 3), point_distribution='chebyshev')
+        else:
+            pass
+
+        # self.saved_coeffs.append(coeffs)
         print(coeffs)
 
         return coeffs
