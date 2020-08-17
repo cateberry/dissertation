@@ -9,6 +9,7 @@ import math
 import time
 import pond
 from scipy.interpolate import approximate_taylor_polynomial
+import sympy as sym
 
 
 class Layer:
@@ -213,7 +214,6 @@ class BatchNorm(Layer):
 
         return bn_approx
 
-
     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
         N, D = d_y.shape[-2], d_y.shape[-1]
 
@@ -231,7 +231,7 @@ class BatchNorm(Layer):
 
         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
                                                                                                           keepdims=True))).inv() * (
-                          1 / N)
+                      1 / N)
 
         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
         self.beta = (d_beta * learning_rate).neg() + self.beta
@@ -408,9 +408,82 @@ class Relu(Layer):
         return np.polyfit(x, y, order)
 
 
+def interpolation(f, psi, points):
+    N = len(psi) - 1
+    A = sym.zeros((N+1, N+1))
+    b = sym.zeros((N+1, 1))
+    psi_sym = psi  # save symbolic expression
+    # Turn psi and f into Python functions
+    x = sym.Symbol('x')
+    psi = [sym.lambdify([x], psi[i]) for i in range(N+1)]
+    f = sym.lambdify([x], f)
+    for i in range(N+1):
+        for j in range(N+1):
+            A[i,j] = psi[j](points[i])
+        b[i,0] = f(points[i])
+    c = A.LUsolve(b)
+    # c is a sympy Matrix object, turn to list
+    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
+    u = sym.simplify(sum(c[i, 0]*psi_sym[i] for i in range(N+1)))
+    return u, c
+
+
+def least_squares(f, psi, Omega):
+    N = len(psi) - 1
+    A = sym.zeros((N+1, N+1))
+    b = sym.zeros((N+1, 1))
+    x = sym.Symbol('x')
+    for i in range(N+1):
+        for j in range(i, N+1):
+            integrand = psi[i]*psi[j]
+            I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+            if isinstance(I, sym.Integral):
+                # Could not integrate symbolically, fall back
+                # on numerical integration with mpmath.quad
+                integrand = sym.lambdify([x], integrand)
+                I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
+            A[i,j] = A[j,i] = I
+        integrand = psi[i]*f
+        I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+        if isinstance(I, sym.Integral):
+            integrand = sym.lambdify([x], integrand)
+            I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
+        b[i,0] = I
+    c = A.LUsolve(b)
+    c = [sym.simplify(c[i,0]) for i in range(c.shape[0])]
+    u = sum(c[i]*psi[i] for i in range(len(psi)))
+    return u, c
+
+# TODO: make this work
+def Lagrange_polynomial(x, i, points):
+    p = 1
+    for k in range(len(points)):
+        if k != i:
+            p *= (x - points[k]) / (points[i] - points[k])
+    return p
+
+
+def Chebyshev_nodes(a, b, N):
+    from math import cos, pi
+    return [0.5 * (a + b) + 0.5 * (b - a) * cos((float(2 * i + 1) / (2 * N + 1)) * pi) for i in range(N + 1)]
+
+
+def Lagrange_polynomials(x, N, Omega, point_distribution='uniform'):
+    if point_distribution == 'uniform':
+        if isinstance(x, sym.Symbol):
+            h = sym.Rational(Omega[1] - Omega[0], N)
+        else:
+            h = (Omega[1] - Omega[0]) / float(N)
+        points = [Omega[0] + i * h for i in range(N + 1)]
+    elif point_distribution == 'chebyshev':
+        points = Chebyshev_nodes(Omega[0], Omega[1], N)
+    psi = [Lagrange_polynomial(x, i, points) for i in range(N + 1)]
+    return psi, points
+
+
 class ReluNormal(Layer):
 
-    def __init__(self, order, mu=0.0, sigma=1.0, n=1000, approx_type='taylor'):
+    def __init__(self, order, mu=0.0, sigma=1.0, n=1000, approx_type='regression'):
         self.cache = None
         self.n_coeff = order + 1
         self.order = order
@@ -454,7 +527,7 @@ class ReluNormal(Layer):
         y = (x > 0) * x
         return y
 
-    def compute_coeffs_normal(self, order, mu, sigma, n, approx_type='taylor'):
+    def compute_coeffs_normal(self, order, mu, sigma, n, approx_type='regression'):
         # Sample x from normal distribution
         x = np.random.normal(mu, sigma, n)
 
@@ -466,8 +539,19 @@ class ReluNormal(Layer):
             # Fit a Taylor polynomial
             taylor_approx = approximate_taylor_polynomial(self.relu, 0, order, 3)  # TODO: experiment with scale
             coeffs = taylor_approx.coeffs
-        elif approx_type == 'lagrange':
-            # Fit a Lagrange polynomial with Chebyshev points
+        elif approx_type == 'lagrange-uniform':
+            # Fit a Lagrange polynomial with equidistant points over interval
+            x = sym.Symbol('x')
+            f = (x > 0) * x
+            psi, points = Lagrange_polynomials(x, 3, [-3, 3], point_distribution='uniform')
+            u = interpolation(f, psi, points)
+
+
+        elif approx_type == 'lagrange-chebyshev':
+            # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
+            y = self.relu(x)
+            coeffs = Lagrange_polynomials(y, 3, (-3, 3), point_distribution='chebyshev')
+        else:
             pass
 
         # self.saved_coeffs.append(coeffs)
@@ -540,7 +624,7 @@ class ReluGalois(Layer):
         slope = out_range / in_range
         normed = np.round(- 127 + slope * (coeffs - min(coeffs))).astype(np.int8)
         # TODO: try uint8?
-        #self.saved_coeffs.append(coeffs)
+        # self.saved_coeffs.append(coeffs)
         print(coeffs)
         print(normed)
 
@@ -699,7 +783,7 @@ class Conv2DQuant:
 
         self.bias = initializer(np.zeros((n_filters, h_out, w_out)))
 
-        init_filters = self.filter_init(self.fshape)   # Initialises with values from normal distribution
+        init_filters = self.filter_init(self.fshape)  # Initialises with values from normal distribution
         # in_range = max(init_filters) - min(init_filters)
         # out_range = 255
         # slope = out_range / in_range
@@ -925,7 +1009,17 @@ def quant_weights(weights):
     in_range = np.max(weights) - np.min(weights)
     out_range = 255
     slope = out_range / in_range
-    quanted_weights = np.round(- 127 + slope * (weights - np.min(weights))).astype(np.int8)
+    quanted_weights = np.round(0 + slope * (weights - np.min(weights))).astype(np.uint8)
+
+    return quanted_weights
+
+
+def quant_weights_MPC(weights):
+    """For NativeTensors"""
+    in_range = weights.max() - weights.min()
+    out_range = 255
+    slope = in_range.inv() * out_range
+    quanted_weights = ((weights - weights.min()) * slope + 0).round().convert_uint8()
 
     return quanted_weights
 
@@ -1237,16 +1331,27 @@ class Sequential(Model):
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
                                             train_loss=train_loss,
                                             val_loss=val_loss, val_acc=val_acc)
-                        print()     # TODO: see if this works
+                        print()  # TODO: see if this works
                     else:
                         # normal print
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
                                             train_loss=train_loss)
-
+        # Save parameters of network each epoch
+        # network_name = 'MPC_CNN' + str(datetime.now().strftime("%y%m%d-%H%M"))
+        # save_name = r'C:\Users\Cate\OneDrive\Documents\City stuff\dissertation\Code\image_analysis\saved_networks' + network_name
+        # with open(save_name + '.pickle', 'wb') as f:
+        #     pickle.dump({'conv_filters': self.layers.Conv2D.filters, 'conv_bias': self.layers.Conv2D.bias,
+        #                  'dense_weights': self.layers.Dense.weights, 'dense_bias': self.layers.Dense.bias,
+        #                  'relu_coeff': self.layers.ReluNormal.coeff, 'relu_coeff_der': self.layers.ReluNormal.coeff_der,
+        #                  'bn_gamma': self.layers.BatchNorm.gamma, 'bn_beta': self.layers.BatchNorm.beta},
+        #                 f, pickle.HIGHEST_PROTOCOL)
         # Newline after progressbar.
         print()
 
     def predict(self, x, batch_size=32, verbose=0):
+        layers_to_quant = [Conv2D.filters, Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
+        self.quantize(layers_to_quant)
+
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
         for batch_index, x_batch in enumerate(x.batches(batch_size)):
@@ -1259,5 +1364,11 @@ class Sequential(Model):
     Implement saving of parameters of network (weights of conv and dense layers, relu approx parameters, batch norm
     parameters?)
         Take batch norm parameters from whole of test set? or from whole of training set?
-    
     """
+
+    def quantize(self, layers):
+        # Convert from PrivateEncodedTensors into NativeTensors to allow for quantization
+        for layer in layers:
+            decrypted_layer = layer.reveal()
+            quanted_layer = quant_weights_MPC(decrypted_layer)
+            layer = quanted_layer

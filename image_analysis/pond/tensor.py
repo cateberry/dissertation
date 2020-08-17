@@ -194,6 +194,12 @@ class NativeTensor:
     def exp(x):
         return NativeTensor(np.exp(x.values))
 
+    def round(x):
+        return NativeTensor(np.round(x.values))
+
+    def convert_uint8(x):
+        return NativeTensor(x.values.astype(np.uint8))
+
     def log(x):
         # use this log to set log 0 -> -10^2
         return NativeTensor(np.ma.log(x.values).filled(-1e2))
