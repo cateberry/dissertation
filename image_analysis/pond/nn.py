@@ -12,6 +12,7 @@ from scipy.interpolate import approximate_taylor_polynomial
 import sympy as sym
 import pickle
 import matplotlib.pyplot as plt
+import sympy as sym
 
 
 class Layer:
@@ -576,6 +577,7 @@ class ReluNormal(Layer):
         else:
             pass
 
+        # self.saved_coeffs.append(coeffs)
         print(coeffs)
 
         return coeffs
@@ -643,7 +645,7 @@ class ReluGalois(Layer):
         in_range = max(coeffs) - min(coeffs)
         out_range = 255
         slope = out_range / in_range
-        normed = np.round(- 127 + slope * (coeffs - min(coeffs))).astype(np.int8)
+        normed = np.round(- + slope * (coeffs - min(coeffs))).astype(np.uint8)
         # TODO: try uint8?
         # self.saved_coeffs.append(coeffs)
         print(coeffs)
