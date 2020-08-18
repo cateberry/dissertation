@@ -11,6 +11,7 @@ import pond
 from scipy.interpolate import approximate_taylor_polynomial
 import sympy as sym
 import pickle
+import matplotlib.pyplot as plt
 
 
 class Layer:
@@ -411,13 +412,13 @@ class Relu(Layer):
 
 def interpolation(f, psi, points):
     N = len(psi) - 1
-    A = sym.zeros((N+1, N+1))
-    b = sym.zeros((N+1, 1))
+    A = sym.zeros(N+1, N+1)
+    b = sym.zeros(N+1, 1)
     psi_sym = psi  # save symbolic expression
     # Turn psi and f into Python functions
     x = sym.Symbol('x')
     psi = [sym.lambdify([x], psi[i]) for i in range(N+1)]
-    f = sym.lambdify([x], f)
+    #f = sym.lambdify([x], f)
     for i in range(N+1):
         for j in range(N+1):
             A[i,j] = psi[j](points[i])
@@ -425,7 +426,7 @@ def interpolation(f, psi, points):
     c = A.LUsolve(b)
     # c is a sympy Matrix object, turn to list
     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
-    u = sym.simplify(sum(c[i, 0]*psi_sym[i] for i in range(N+1)))
+    u = sym.simplify(sum(c[i]*psi_sym[i] for i in range(N+1)))
     return u, c
 
 
@@ -469,15 +470,16 @@ def Chebyshev_nodes(a, b, N):
     return [0.5 * (a + b) + 0.5 * (b - a) * cos((float(2 * i + 1) / (2 * N + 1)) * pi) for i in range(N + 1)]
 
 
-def Lagrange_polynomials(x, N, Omega, point_distribution='uniform'):
+def Lagrange_polynomials(x, N, omega, point_distribution='uniform'):
     if point_distribution == 'uniform':
         if isinstance(x, sym.Symbol):
-            h = sym.Rational(Omega[1] - Omega[0], N)
+            # h = sym.Rational(omega[1] - omega[0], N)
+            h = (omega[1] - omega[0]) / float(N)
         else:
-            h = (Omega[1] - Omega[0]) / float(N)
-        points = [Omega[0] + i * h for i in range(N + 1)]
+            h = (omega[1] - omega[0]) / float(N)
+        points = [omega[0] + i * h for i in range(N + 1)]
     elif point_distribution == 'chebyshev':
-        points = Chebyshev_nodes(Omega[0], Omega[1], N)
+        points = Chebyshev_nodes(omega[0], omega[1], N)
     psi = [Lagrange_polynomial(x, i, points) for i in range(N + 1)]
     return psi, points
 
@@ -540,13 +542,33 @@ class ReluNormal(Layer):
             # Fit a Taylor polynomial
             taylor_approx = approximate_taylor_polynomial(self.relu, 0, order, 3)  # TODO: experiment with scale
             coeffs = taylor_approx.coeffs
-        elif approx_type == 'lagrange-uniform':
+        elif approx_type == 'lagrange-uniform':  # TODO: experiment with parameters
             # Fit a Lagrange polynomial with equidistant points over interval
             x = sym.Symbol('x')
-            f = (x > 0) * x
+            #f = (x > 0) * x
+            f = lambda y: (y > 0) * y
             psi, points = Lagrange_polynomials(x, 3, [-3, 3], point_distribution='uniform')
-            u, coeffs = interpolation(f, psi, points)
-        # TODO: test above
+            print(psi, points)
+            u, c = interpolation(f, psi, points)
+            coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
+            coeffs = [u.args[0]] + coeffs_1
+            coeffs = np.array(coeffs)
+
+            def comparison_plot(f, u, Omega):
+                x = sym.Symbol('x')
+                #f = sym.lambdify([x], f, modules="numpy")
+                u = sym.lambdify([x], u, modules="numpy")
+                resolution = 401  # no of points in plot
+                xcoor = np.linspace(Omega[0], Omega[1], resolution)
+                exact = f(xcoor)
+                approx = u(xcoor)
+                plt.plot(xcoor, approx)
+
+                plt.plot(xcoor, exact)
+                plt.legend(['approximation', 'exact'])
+                plt.show()
+            # comparison_plot(f, u, [-3, 3])
+
         elif approx_type == 'lagrange-chebyshev':
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             y = self.relu(x)
@@ -554,7 +576,6 @@ class ReluNormal(Layer):
         else:
             pass
 
-        # self.saved_coeffs.append(coeffs)
         print(coeffs)
 
         return coeffs
@@ -1355,7 +1376,7 @@ class Sequential(Model):
 # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
         # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
-        self.quantize()
+        #self.quantize()
 
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
