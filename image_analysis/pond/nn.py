@@ -8,6 +8,10 @@ from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor,
 import math
 import time
 import pond
+from scipy.interpolate import approximate_taylor_polynomial
+import sympy as sym
+import pickle
+import matplotlib.pyplot as plt
 import sympy as sym
 
 
@@ -34,7 +38,7 @@ class Dense(Layer):
         output_shape = [input_shape[0]] + [self.num_nodes]
         return output_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         y = x.dot(self.weights) + self.bias
         self.cache = x
         return y
@@ -52,6 +56,124 @@ class Dense(Layer):
         self.bias = (d_bias * learning_rate).neg() + self.bias
 
         return d_x
+
+
+class DenseQuant(Layer):
+
+    def __init__(self, num_nodes, num_features, initial_scale=.01, l2reg_lambda=0.0):
+        self.num_nodes = num_nodes
+        self.num_features = num_features
+        self.initial_scale = initial_scale
+        self.l2reg_lambda = l2reg_lambda
+        self.weights = None
+        self.bias = None
+        self.initializer = None
+        self.cache = None
+
+    def initialize(self, input_shape, initializer=None, **_):
+        if initializer is not None:
+            init_weights = np.random.randn(self.num_features, self.num_nodes) * self.initial_scale
+            quanted_weights = quant_weights(init_weights)
+            self.weights = initializer(quanted_weights)
+            self.bias = initializer(np.zeros((1, self.num_nodes)))
+        output_shape = [input_shape[0]] + [self.num_nodes]
+        return output_shape
+
+    def forward(self, x):
+        y = x.dot(self.weights) + self.bias
+        self.cache = x
+        return y
+
+    def backward(self, d_y, learning_rate):
+        x = self.cache
+        d_x = d_y.dot(self.weights.transpose())
+        d_weights = x.transpose().dot(d_y)
+        if self.l2reg_lambda > 0:
+            d_weights = d_weights + self.weights * (self.l2reg_lambda / x.shape[0])
+
+        d_bias = d_y.sum(axis=0)
+        # update weights and bias
+        self.weights = (d_weights * learning_rate).neg() + self.weights
+        self.bias = (d_bias * learning_rate).neg() + self.bias
+
+        return d_x
+
+
+# class BatchNormOld(Layer):
+#     def __init__(self):
+#         self.cache = None
+#         self.epsilon = 2 ** -10
+#         self.beta = None
+#         self.gamma = None
+#         self.moving_mean = None
+#         self.moving_var = None
+#         self.initializer = None
+#
+#     def initialize(self, input_shape, initializer=None, **_):
+#         if initializer is not None:
+#             weight_shape = [input_shape[-1], ]
+#             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
+#             self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
+#             self.moving_mean = initializer(np.zeros(weight_shape))
+#             self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
+#         return input_shape  # shape doesn't change after BN
+#
+#     def forward(self, x):
+#         """
+#         Batch norm forward pass with separate methods for training and classification
+#         """
+#         if not prediction:
+#             denom = 1 / x.shape[1]  # mean in channel dimension
+#             batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
+#             self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
+#
+#             batch_var_sum = (x - batch_mean).square()
+#             batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
+#             self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
+#
+#             numerator = x - batch_mean
+#             denominator = (batch_var + self.epsilon).sqrt()
+#             denom_inv = denominator.inv()
+#             norm = numerator * denom_inv
+#             bn_approx = norm * self.gamma + self.beta
+#             self.cache = numerator, denominator, norm, self.gamma, denom_inv
+#
+#             return bn_approx
+#         else:
+#             batch_mean = self.moving_mean
+#             batch_var = self.moving_var
+#
+#             numerator = x - batch_mean
+#             denominator = (batch_var + self.epsilon).inv_sqrt()
+#
+#             norm = numerator * denominator
+#             bn_approx = norm * self.gamma + self.beta
+#
+#             return bn_approx
+#
+#     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
+#         N, D = d_y.shape[-2], d_y.shape[-1]
+#
+#         numerator, denominator, norm, gamma, denom_inv = self.cache
+#         d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  # dL/dgamma = dL/dy * dy/dgamma
+#         d_beta = d_y.sum(axis=1, keepdims=True)
+#
+#         d_norm = d_y * gamma
+#         # For debugging:
+#         # d_x1 = d_norm * N
+#         # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+#         # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
+#         # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
+#         # d_x = d_x4.inv() * (1 / N)
+#
+#         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
+#                                                                                                           keepdims=True))).inv() * (
+#                           1 / N)
+#
+#         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
+#         self.beta = (d_beta * learning_rate).neg() + self.beta
+#
+#         return d_x
 
 
 class BatchNorm(Layer):
@@ -73,84 +195,7 @@ class BatchNorm(Layer):
             self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
         return input_shape  # shape doesn't change after BN
 
-    def forward(self, x, prediction=False):
-        """
-        Batch norm forward pass with separate methods for training and classification
-        """
-        if not prediction:
-            denom = 1 / x.shape[1]  # mean in channel dimension
-            batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-            self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
-
-            batch_var_sum = (x - batch_mean).square()
-            batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
-            self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
-
-            numerator = x - batch_mean
-            denominator = (batch_var + self.epsilon).sqrt()
-            denom_inv = denominator.inv()
-            norm = numerator * denom_inv
-            bn_approx = norm * self.gamma + self.beta
-            self.cache = numerator, denominator, norm, self.gamma, denom_inv
-
-            return bn_approx
-        else:  # TODO: test prediction
-            batch_mean = self.moving_mean
-            batch_var = self.moving_var
-
-            numerator = x - batch_mean
-            denominator = (batch_var + self.epsilon).inv_sqrt()
-
-            norm = numerator * denominator
-            bn_approx = norm * self.gamma + self.beta
-
-            return bn_approx
-
-    def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
-        N, D = d_y.shape[-2], d_y.shape[-1]
-
-        numerator, denominator, norm, gamma, denom_inv = self.cache
-        d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  # dL/dgamma = dL/dy * dy/dgamma
-        d_beta = d_y.sum(axis=1, keepdims=True)
-
-        d_norm = d_y * gamma
-        # For debugging:
-        # d_x1 = d_norm * N
-        # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
-        # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
-        # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
-        # d_x = d_x4.inv() * (1 / N)
-
-        d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
-                                                                                                          keepdims=True))).inv() * (
-                          1 / N)
-
-        self.gamma = (d_gamma * learning_rate).neg() + self.gamma
-        self.beta = (d_beta * learning_rate).neg() + self.beta
-
-        return d_x
-
-
-class BatchNormTest(Layer):
-    def __init__(self):
-        self.cache = None
-        self.epsilon = 2 ** -10
-        self.beta = None
-        self.gamma = None
-        self.moving_mean = None
-        self.moving_var = None
-        self.initializer = None
-
-    def initialize(self, input_shape, initializer=None, **_):
-        if initializer is not None:
-            weight_shape = [input_shape[-1], ]
-            self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
-            self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
-            self.moving_mean = initializer(np.zeros(weight_shape))
-            self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
-        return input_shape  # shape doesn't change after BN
-
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         """
         Batch norm forward pass
         """
@@ -172,7 +217,6 @@ class BatchNormTest(Layer):
 
         return bn_approx
 
-
     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
         N, D = d_y.shape[-2], d_y.shape[-1]
 
@@ -190,7 +234,7 @@ class BatchNormTest(Layer):
 
         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
                                                                                                           keepdims=True))).inv() * (
-                          1 / N)
+                      1 / N)
 
         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
         self.beta = (d_beta * learning_rate).neg() + self.beta
@@ -206,7 +250,7 @@ class SigmoidExact(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         y = (x.neg().exp() + 1).inv()
         self.cache = y
         return y
@@ -226,7 +270,7 @@ class Sigmoid(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         w0 = 0.5
         w1 = 0.2159198015
         w3 = -0.0082176259
@@ -260,7 +304,7 @@ class SoftmaxStable(Layer):
         self.cache = None
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         # we add the - x.max() for numerical stability, i.e. to prevent overflow
         likelihoods = (x - x.max(axis=1, keepdims=True)).clip(-10.0, np.inf).exp()
         probs = likelihoods.div(likelihoods.sum(axis=1, keepdims=True))
@@ -285,7 +329,7 @@ class Softmax(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         exp = x.exp()
         probs = exp.div(exp.sum(axis=1, keepdims=True))
         self.cache = probs
@@ -308,7 +352,7 @@ class ReluExact(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         y = x * (x > 0)
         self.cache = x
         return y
@@ -334,7 +378,7 @@ class Relu(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         self.initializer = type(x)
 
         n_dims = len(x.shape)
@@ -367,16 +411,15 @@ class Relu(Layer):
         return np.polyfit(x, y, order)
 
 
-
 def interpolation(f, psi, points):
     N = len(psi) - 1
-    A = sym.zeros((N+1, N+1))
-    b = sym.zeros((N+1, 1))
+    A = sym.zeros(N+1, N+1)
+    b = sym.zeros(N+1, 1)
     psi_sym = psi  # save symbolic expression
     # Turn psi and f into Python functions
     x = sym.Symbol('x')
     psi = [sym.lambdify([x], psi[i]) for i in range(N+1)]
-    f = sym.lambdify([x], f)
+    #f = sym.lambdify([x], f)
     for i in range(N+1):
         for j in range(N+1):
             A[i,j] = psi[j](points[i])
@@ -384,7 +427,7 @@ def interpolation(f, psi, points):
     c = A.LUsolve(b)
     # c is a sympy Matrix object, turn to list
     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
-    u = sym.simplify(sum(c[i, 0]*psi_sym[i] for i in range(N+1)))
+    u = sym.simplify(sum(c[i]*psi_sym[i] for i in range(N+1)))
     return u, c
 
 
@@ -428,15 +471,16 @@ def Chebyshev_nodes(a, b, N):
     return [0.5 * (a + b) + 0.5 * (b - a) * cos((float(2 * i + 1) / (2 * N + 1)) * pi) for i in range(N + 1)]
 
 
-def Lagrange_polynomials(x, N, Omega, point_distribution='uniform'):
+def Lagrange_polynomials(x, N, omega, point_distribution='uniform'):
     if point_distribution == 'uniform':
         if isinstance(x, sym.Symbol):
-            h = sym.Rational(Omega[1] - Omega[0], N)
+            # h = sym.Rational(omega[1] - omega[0], N)
+            h = (omega[1] - omega[0]) / float(N)
         else:
-            h = (Omega[1] - Omega[0]) / float(N)
-        points = [Omega[0] + i * h for i in range(N + 1)]
+            h = (omega[1] - omega[0]) / float(N)
+        points = [omega[0] + i * h for i in range(N + 1)]
     elif point_distribution == 'chebyshev':
-        points = Chebyshev_nodes(Omega[0], Omega[1], N)
+        points = Chebyshev_nodes(omega[0], omega[1], N)
     psi = [Lagrange_polynomial(x, i, points) for i in range(N + 1)]
     return psi, points
 
@@ -499,13 +543,33 @@ class ReluNormal(Layer):
             # Fit a Taylor polynomial
             taylor_approx = approximate_taylor_polynomial(self.relu, 0, order, 3)  # TODO: experiment with scale
             coeffs = taylor_approx.coeffs
-        elif approx_type == 'lagrange-uniform':
+        elif approx_type == 'lagrange-uniform':  # TODO: experiment with parameters
             # Fit a Lagrange polynomial with equidistant points over interval
             x = sym.Symbol('x')
-            f = (x > 0) * x
+            #f = (x > 0) * x
+            f = lambda y: (y > 0) * y
             psi, points = Lagrange_polynomials(x, 3, [-3, 3], point_distribution='uniform')
-            u, coeffs = interpolation(f, psi, points)
-        # TODO: test above
+            print(psi, points)
+            u, c = interpolation(f, psi, points)
+            coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
+            coeffs = [u.args[0]] + coeffs_1
+            coeffs = np.array(coeffs)
+
+            def comparison_plot(f, u, Omega):
+                x = sym.Symbol('x')
+                #f = sym.lambdify([x], f, modules="numpy")
+                u = sym.lambdify([x], u, modules="numpy")
+                resolution = 401  # no of points in plot
+                xcoor = np.linspace(Omega[0], Omega[1], resolution)
+                exact = f(xcoor)
+                approx = u(xcoor)
+                plt.plot(xcoor, approx)
+
+                plt.plot(xcoor, exact)
+                plt.legend(['approximation', 'exact'])
+                plt.show()
+            # comparison_plot(f, u, [-3, 3])
+
         elif approx_type == 'lagrange-chebyshev':
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             y = self.relu(x)
@@ -519,6 +583,77 @@ class ReluNormal(Layer):
         return coeffs
 
 
+class ReluGalois(Layer):
+
+    def __init__(self, order, mu=0.0, sigma=1.0, n=1000):
+        self.cache = None
+        self.n_coeff = order + 1
+        self.order = order
+        self.saved_coeffs = []
+        self.coeff = NativeTensor(self.compute_coeffs_galois(order, mu, sigma, n))
+        self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
+        self.initializer = None
+        assert order > 2
+
+    @staticmethod
+    def initialize(input_shape, **_):
+        return input_shape
+
+    def forward(self, x):
+        self.initializer = type(x)
+
+        n_dims = len(x.shape)
+
+        powers = [x, x.square()]
+        for i in range(self.order - 2):
+            powers.append(x * powers[-1])
+
+        # try:
+        #     x_4_1 = powers[3] + 1
+        # except:
+        #     x_4_1 = x * powers[2] + 1
+
+        # stack list into tensor
+        forward_powers = stack(powers).flip(axis=n_dims)
+        # y = forward_powers.dot_QG(self.coeff[:-1], QG=x_4_1) + self.coeff[-1]
+        y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+
+        # quantize to 8-bit ints
+        # in_range = max(y) - min(y)
+        # out_range = 255
+        # slope = out_range / in_range
+        # y = np.round(- 127 + slope * (y - min(y))).astype(np.int8)
+
+        # cache all powers except the last
+        self.cache = stack(powers[:-1]).flip(axis=n_dims)
+        return y
+
+    def backward(self, d_y, _):
+        # the powers of the forward phase: x^1 ...x^order-1
+        powers = self.cache
+        c = d_y * self.coeff_der[-1]
+        d_y.expand_dims(axis=-1)
+        d_x = (d_y * powers).dot(self.coeff_der[:-1]) + c
+        return d_x
+
+    def compute_coeffs_galois(self, order, mu, sigma, n):
+        x = np.random.normal(mu, sigma, n)
+        y = (x > 0) * x
+        coeffs = np.polyfit(x, y, order)
+
+        # Map x to [-127, 127]
+        in_range = max(coeffs) - min(coeffs)
+        out_range = 255
+        slope = out_range / in_range
+        normed = np.round(- + slope * (coeffs - min(coeffs))).astype(np.uint8)
+        # TODO: try uint8?
+        # self.saved_coeffs.append(coeffs)
+        print(coeffs)
+        print(normed)
+
+        return normed
+
+
 class Square(Layer):
     def __init__(self):
         self.cache = None
@@ -527,7 +662,7 @@ class Square(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         y = x.square()
         self.cache = x
         return y
@@ -546,7 +681,7 @@ class Dropout(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         pass
 
     def backward(self, dx):
@@ -561,7 +696,7 @@ class Flatten(Layer):
     def initialize(input_shape, **_):
         return [input_shape[0]] + [np.prod(input_shape[1:])]
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         self.shape = x.shape
         y = x.reshape(x.shape[0], -1)
         return y
@@ -607,7 +742,86 @@ class Conv2D:
 
         return [n_x, n_filters, h_out, w_out]
 
-    def forward(self, x, prediction=False):
+    def quantize(self):
+        decrypted_filters = self.filters.reveal()
+        quanted_filters = quant_weights_MPC(decrypted_filters)
+        self.filters = quanted_filters
+
+    def forward(self, x):
+        self.cached_input_shape = x.shape
+        self.cache = x
+        out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
+
+        return out + self.bias
+
+    def backward(self, d_y, learning_rate):
+        x = self.cache
+        h_filter, w_filter, d_filter, n_filter = self.filters.shape
+        dx = None
+
+        if self.model.layers.index(self) != 0:
+            W_reshaped = self.filters.reshape(n_filter, -1).transpose()
+            dout_reshaped = d_y.transpose(1, 2, 3, 0).reshape(n_filter, -1)
+            dx = W_reshaped.dot(dout_reshaped).col2im(imshape=self.cached_input_shape, field_height=h_filter,
+                                                      field_width=w_filter, padding=self.padding, stride=self.strides)
+
+        d_w = conv2d_bw(x, d_y, self.cached_x_col, self.filters.shape, padding=self.padding, strides=self.strides)
+        d_bias = d_y.sum(axis=0)
+
+        if self.l2reg_lambda > 0:
+            d_w = d_w + self.filters * (self.l2reg_lambda / self.cached_input_shape[0])
+
+        self.filters = (d_w * learning_rate).neg() + self.filters
+        self.bias = (d_bias * learning_rate).neg() + self.bias
+
+        return dx
+
+
+class Conv2DQuant:
+    def __init__(self, fshape, strides=1, padding=0, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp),
+                 l2reg_lambda=0.0, channels_first=True):
+        """ 2 Dimensional convolutional layer, expects NCHW data format
+            fshape: tuple of rank 4
+            strides: int with stride size
+            filter init: lambda function with shape parameter
+            Example: Conv2D((4, 4, 1, 20), strides=2, filter_init=lambda shp: np.random.normal(scale=0.01,
+            size=shp))
+        """
+        self.fshape = fshape
+        self.strides = strides
+        self.padding = padding
+        self.filter_init = filter_init
+        self.l2reg_lambda = l2reg_lambda
+        self.cache = None
+        self.cached_x_col = None
+        self.cached_input_shape = None
+        self.initializer = None
+        self.filters = None
+        self.bias = None
+        self.model = None
+        assert channels_first
+
+    def initialize(self, input_shape, model=None, initializer=None):
+        self.model = model
+
+        h_filter, w_filter, d_filters, n_filters = self.fshape
+        n_x, d_x, h_x, w_x = input_shape
+        h_out = int((h_x - h_filter + 2 * self.padding) / self.strides + 1)
+        w_out = int((w_x - w_filter + 2 * self.padding) / self.strides + 1)
+
+        self.bias = initializer(np.zeros((n_filters, h_out, w_out)))
+
+        init_filters = self.filter_init(self.fshape)  # Initialises with values from normal distribution
+        # in_range = max(init_filters) - min(init_filters)
+        # out_range = 255
+        # slope = out_range / in_range
+        quant_filters = quant_weights(init_filters)
+
+        self.filters = initializer(quant_filters)
+
+        return [n_x, n_filters, h_out, w_out]
+
+    def forward(self, x):
         self.cached_input_shape = x.shape
         self.cache = x
         out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
@@ -660,7 +874,7 @@ class AveragePooling2D:
         s = (input_shape[2] - self.pool_size[0]) // self.strides + 1
         return input_shape[:2] + [s, s]
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         # forward pass of average pooling, assumes NCHW data format
         s = (x.shape[2] - self.pool_size[0]) // self.strides + 1
         self.initializer = type(x)
@@ -729,7 +943,7 @@ class ConvAveragePooling2D:
 
         return [n_x, n_filters, s, s]
 
-    def forward(self, x, prediction=False):
+    def forward(self, x):
         self.initializer = type(x)
         self.cached_input_shape = x.shape
         self.cache = x
@@ -782,7 +996,7 @@ class Reveal(Layer):
         return input_shape
 
     @staticmethod
-    def forward(x, prediction=False):
+    def forward(x):
         return x.reveal()
 
     @staticmethod
@@ -817,6 +1031,25 @@ class CrossEntropy(Loss):
 
 class SoftmaxCrossEntropy(Loss):
     pass
+
+
+def quant_weights(weights):
+    in_range = np.max(weights) - np.min(weights)
+    out_range = 255
+    slope = out_range / in_range
+    quanted_weights = np.round(0 + slope * (weights - np.min(weights))).astype(np.uint8)
+
+    return quanted_weights
+
+
+def quant_weights_MPC(weights):
+    """For NativeTensors"""
+    in_range = weights.max() - weights.min()
+    out_range = 255
+    slope = in_range.inv() * out_range
+    quanted_weights = ((weights - weights.min()) * slope + 0).round().convert_uint8()
+
+    return quanted_weights
 
 
 def conv2d(x, y, strides, padding, precomputed=None, save_mask=True):
@@ -1044,7 +1277,6 @@ class Sequential(Model):
         if layers is None:
             layers = []
         self.layers = layers
-        self.prediction = False
 
     def initialize(self, input_shape, initializer, **_):
         for layer in self.layers:
@@ -1052,7 +1284,7 @@ class Sequential(Model):
 
     def forward(self, x):
         for layer in self.layers:
-            x = layer.forward(x, prediction=self.prediction) # TODO: take out prediction stuff if not applying
+            x = layer.forward(x)
         return x
 
     def backward(self, d_y, learning_rate):
@@ -1127,21 +1359,45 @@ class Sequential(Model):
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
                                             train_loss=train_loss,
                                             val_loss=val_loss, val_acc=val_acc)
+                        print()  # TODO: see if this works
                     else:
                         # normal print
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
                                             train_loss=train_loss)
-
+        # Save parameters of network each epoch
+        # network_name = 'MPC_CNN' + str(datetime.now().strftime("%y%m%d-%H%M"))
+        # save_name = r'C:\Users\Cate\OneDrive\Documents\City stuff\dissertation\Code\image_analysis\saved_networks' + network_name
+        # with open(save_name + '.pickle', 'wb') as f:
+        #     pickle.dump({'conv_filters': self.layers.Conv2D.filters, 'conv_bias': self.layers.Conv2D.bias,
+        #                  'dense_weights': self.layers.Dense.weights, 'dense_bias': self.layers.Dense.bias,
+        #                  'relu_coeff': self.layers.ReluNormal.coeff, 'relu_coeff_der': self.layers.ReluNormal.coeff_der,
+        #                  'bn_gamma': self.layers.BatchNorm.gamma, 'bn_beta': self.layers.BatchNorm.beta},
+        #                 f, pickle.HIGHEST_PROTOCOL)
         # Newline after progressbar.
         print()
-
+# TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
+        # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
+        #self.quantize()
+
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
-        self.prediction = True
         for batch_index, x_batch in enumerate(x.batches(batch_size)):
             if verbose >= 2: print(datetime.now(), "Batch %s" % batch_index)
             y_batch = self.forward(x_batch)
             batches.append(y_batch)
-        self.prediction = False
         return reduce(lambda x_, y: x_.concatenate(y), batches)
+
+    """
+    Implement saving of parameters of network (weights of conv and dense layers, relu approx parameters, batch norm
+    parameters?)
+        Take batch norm parameters from whole of test set? or from whole of training set?
+    """
+    # TODO: debug and see what happens when quantize is called
+    # TODO: check time taken for evaluation to see if quantization has an effect
+    def quantize(self):
+        for layer in self.layers:
+            try:
+                layer.quantize()
+            except:
+                pass
