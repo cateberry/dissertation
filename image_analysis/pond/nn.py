@@ -506,8 +506,8 @@ def approximate_lagrange(order, point_dist='uniform'):
     n_points = order
     psi, points = Lagrange_polynomials(x, n_points, [-3, 3], point_distribution=point_dist)
     print(psi, points)
-    # u, c = interpolation(f, psi, points)
-    u, c = least_squares(f, psi, points)Smal
+    u, c = interpolation(f, psi, points)
+    # u, c = least_squares(f, psi, points)Smal
     # try: coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
     # except: coeffs_1 = [list(u.args[1][i].as_coefficients_dict().values())[0] for i in range(1, len(u.args[1]))]
     # coeffs = [u.args[0]] + coeffs_1
