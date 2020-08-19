@@ -485,6 +485,46 @@ def Lagrange_polynomials(x, N, omega, point_distribution='uniform'):
     return psi, points
 
 
+def comparison_plot(f, u, Omega):
+    x = sym.Symbol('x')
+    u = sym.lambdify([x], u, modules="numpy")
+    resolution = 401  # no of points in plot
+    xcoor = np.linspace(Omega[0], Omega[1], resolution)
+    exact = f(xcoor)
+    approx = u(xcoor)
+    plt.plot(xcoor, approx)
+
+    plt.plot(xcoor, exact)
+    plt.legend(['approximation', 'exact'])
+    plt.show()
+
+
+def approximate_lagrange(order, point_dist='uniform'):
+    x = sym.Symbol('x')
+    # f = (x > 0) * x
+    f = lambda y: (y > 0) * y
+    n_points = order
+    psi, points = Lagrange_polynomials(x, n_points, [-3, 3], point_distribution=point_dist)
+    print(psi, points)
+    u, c = interpolation(f, psi, points)
+    # try: coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
+    # except: coeffs_1 = [list(u.args[1][i].as_coefficients_dict().values())[0] for i in range(1, len(u.args[1]))]
+    # coeffs = [u.args[0]] + coeffs_1
+
+    coeff_list = []
+    order = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
+    i = 0
+    expression = u
+    if n_points >= 4:
+        expression = u.expand()
+    while i < len(order):
+        coeff_list.append(expression.as_coefficients_dict()[order[i]])
+        i += 1
+
+    coeffs = np.array(coeff_list[:n_points + 1])
+    comparison_plot(f, u, [-3, 3])
+    return coeffs
+
 class ReluNormal(Layer):
 
     def __init__(self, order, mu=0.0, sigma=1.0, n=1000, approx_type='regression'):
@@ -531,7 +571,7 @@ class ReluNormal(Layer):
         y = (x > 0) * x
         return y
 
-    def compute_coeffs_normal(self, order, mu, sigma, n, approx_type='regression'):
+    def compute_coeffs_normal(self, order, mu, sigma, n, approx_type='regression', n_points=3):
         # Sample x from normal distribution
         x = np.random.normal(mu, sigma, n)
 
@@ -545,39 +585,13 @@ class ReluNormal(Layer):
             coeffs = taylor_approx.coeffs
         elif approx_type == 'lagrange-uniform':  # TODO: experiment with parameters
             # Fit a Lagrange polynomial with equidistant points over interval
-            x = sym.Symbol('x')
-            #f = (x > 0) * x
-            f = lambda y: (y > 0) * y
-            psi, points = Lagrange_polynomials(x, 3, [-3, 3], point_distribution='uniform')
-            print(psi, points)
-            u, c = interpolation(f, psi, points)
-            coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
-            coeffs = [u.args[0]] + coeffs_1
-            coeffs = np.array(coeffs)
-
-            def comparison_plot(f, u, Omega):
-                x = sym.Symbol('x')
-                #f = sym.lambdify([x], f, modules="numpy")
-                u = sym.lambdify([x], u, modules="numpy")
-                resolution = 401  # no of points in plot
-                xcoor = np.linspace(Omega[0], Omega[1], resolution)
-                exact = f(xcoor)
-                approx = u(xcoor)
-                plt.plot(xcoor, approx)
-
-                plt.plot(xcoor, exact)
-                plt.legend(['approximation', 'exact'])
-                plt.show()
-            # comparison_plot(f, u, [-3, 3])
-
-        elif approx_type == 'lagrange-chebyshev':
+            coeffs = approximate_lagrange(order, 'uniform')
+        elif approx_type == 'lagrange-chebyshev':  # TODO: experiment with number of points
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
-            y = self.relu(x)
-            coeffs = Lagrange_polynomials(y, 3, (-3, 3), point_distribution='chebyshev')
+            coeffs = approximate_lagrange(order, 'chebyshev')
         else:
             pass
 
-        # self.saved_coeffs.append(coeffs)
         print(coeffs)
 
         return coeffs
