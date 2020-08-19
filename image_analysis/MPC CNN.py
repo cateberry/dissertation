@@ -62,8 +62,9 @@ Need a way to save the parameters of the trained MPC network
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    ReluNormal(order=4, approx_type='lagrange-uniform'),  # approx_type='taylor'),
+    ReluNormal(order=3, approx_type='lagrange-uniform'),  # approx_type='taylor'),
     # Relu(order=4),
+    # ReluNormal(order=3),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
     Dense(10, 6272),  # 3136 5408 6272

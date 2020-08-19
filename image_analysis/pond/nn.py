@@ -433,8 +433,8 @@ def interpolation(f, psi, points):
 
 def least_squares(f, psi, Omega):
     N = len(psi) - 1
-    A = sym.zeros((N+1, N+1))
-    b = sym.zeros((N+1, 1))
+    A = sym.zeros(N+1, N+1)
+    b = sym.zeros(N+1, 1)
     x = sym.Symbol('x')
     for i in range(N+1):
         for j in range(i, N+1):
@@ -445,19 +445,19 @@ def least_squares(f, psi, Omega):
                 # on numerical integration with mpmath.quad
                 integrand = sym.lambdify([x], integrand)
                 I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
-            A[i,j] = A[j,i] = I
-        integrand = psi[i]*f
+            A[i, j] = A[j, i] = I
+        integrand = psi[i]*f  # TODO: look at source to figure out how to fix this (f is a fn in my case)
         I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
         if isinstance(I, sym.Integral):
             integrand = sym.lambdify([x], integrand)
             I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
-        b[i,0] = I
+        b[i, 0] = I
     c = A.LUsolve(b)
-    c = [sym.simplify(c[i,0]) for i in range(c.shape[0])]
+    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
     u = sum(c[i]*psi[i] for i in range(len(psi)))
     return u, c
 
-# TODO: make this work
+
 def Lagrange_polynomial(x, i, points):
     p = 1
     for k in range(len(points)):
@@ -506,7 +506,8 @@ def approximate_lagrange(order, point_dist='uniform'):
     n_points = order
     psi, points = Lagrange_polynomials(x, n_points, [-3, 3], point_distribution=point_dist)
     print(psi, points)
-    u, c = interpolation(f, psi, points)
+    # u, c = interpolation(f, psi, points)
+    u, c = least_squares(f, psi, points)Smal
     # try: coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
     # except: coeffs_1 = [list(u.args[1][i].as_coefficients_dict().values())[0] for i in range(1, len(u.args[1]))]
     # coeffs = [u.args[0]] + coeffs_1
@@ -1389,7 +1390,7 @@ class Sequential(Model):
         #                 f, pickle.HIGHEST_PROTOCOL)
         # Newline after progressbar.
         print()
-# TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
+    # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
         # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
         #self.quantize()
