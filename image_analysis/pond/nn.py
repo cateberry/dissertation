@@ -443,8 +443,8 @@ def interpolation(f, psi, points):
     #f = sym.lambdify([x], f)
     for i in range(N+1):
         for j in range(N+1):
-            A[i,j] = psi[j](points[i])
-        b[i,0] = f(points[i])
+            A[i, j] = psi[j](points[i])
+        b[i, 0] = f(points[i])
     c = A.LUsolve(b)
     # c is a sympy Matrix object, turn to list
     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
@@ -477,6 +477,52 @@ def least_squares(f, psi, Omega):
     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
     u = sum(c[i]*psi[i] for i in range(len(psi)))
     return u, c
+
+
+def least_squares_numerical(f, psi, N, x,
+                            integration_method='scipy',
+                            orthogonal_basis=False):
+    import scipy.integrate
+    A = np.zeros((N+1, N+1))
+    b = np.zeros(N+1)
+    Omega = [x[0], x[-1]]
+    dx = x[1] - x[0]
+
+    for i in range(N+1):
+        j_limit = i+1 if orthogonal_basis else N+1
+        for j in range(i, j_limit):
+            if integration_method == 'scipy':
+                A_ij = scipy.integrate.quad(
+                    lambda x: psi(x,i)*psi(x,j),
+                    Omega[0], Omega[1], epsabs=1E-9, epsrel=1E-9)[0]
+            elif integration_method == 'sympy':
+                A_ij = sym.mpmath.quad(
+                    lambda x: psi(x,i)*psi(x,j),
+                    [Omega[0], Omega[1]])
+            else:
+                values = psi(x,i)*psi(x,j)
+                A_ij = trapezoidal(values, dx)
+            A[i,j] = A[j,i] = A_ij
+
+        if integration_method == 'scipy':
+            b_i = scipy.integrate.quad(
+                lambda x: f(x)*psi(x,i), Omega[0], Omega[1],
+                epsabs=1E-9, epsrel=1E-9)[0]
+        elif integration_method == 'sympy':
+            b_i = sym.mpmath.quad(
+                lambda x: f(x)*psi(x,i), [Omega[0], Omega[1]])
+        else:
+            values = f(x)*psi(x,i)
+            b_i = trapezoidal(values, dx)
+        b[i] = b_i
+
+    c = b/np.diag(A) if orthogonal_basis else np.linalg.solve(A, b)
+    u = sum(c[i]*psi(x, i) for i in range(N+1))
+    return u, c
+
+def trapezoidal(values, dx):
+    """Integrate values by the Trapezoidal rule (mesh size dx)."""
+    return dx*(np.sum(values) - 0.5*values[0] - 0.5*values[-1])
 
 
 def Lagrange_polynomial(x, i, points):
@@ -527,8 +573,11 @@ def approximate_lagrange(order, point_dist='uniform'):
     n_points = order
     psi, points = Lagrange_polynomials(x, n_points, [-3, 3], point_distribution=point_dist)
     print(psi, points)
-    u, c = interpolation(f, psi, points)
-    # u, c = least_squares(f, psi, points)Smal
+    # u, c = interpolation(f, psi, points)
+    # u, c = least_squares(f, psi, points)
+    N = 20
+    u, c = least_squares_numerical(f, psi, N, x, integration_method='scipy', orthogonal_basis=False)
+
     # try: coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
     # except: coeffs_1 = [list(u.args[1][i].as_coefficients_dict().values())[0] for i in range(1, len(u.args[1]))]
     # coeffs = [u.args[0]] + coeffs_1
@@ -802,7 +851,6 @@ class Conv2D:
         decrypted_filters = self.filters.reveal()
         quanted_filters = quant_weights_MPC(decrypted_filters)
         self.quant_filters = quanted_filters
-        self.
 
         decrypted_bias = self.bias.reveal()
         quanted_bias = quant_weights_MPC(decrypted_bias)
@@ -1447,12 +1495,13 @@ class Sequential(Model):
     # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
         # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
-        self.quantize()
+        #self.quantize()
+        predict = False
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
         for batch_index, x_batch in enumerate(x.batches(batch_size)):
             if verbose >= 2: print(datetime.now(), "Batch %s" % batch_index)
-            y_batch = self.forward(x_batch, True)
+            y_batch = self.forward(x_batch, predict)
             batches.append(y_batch)
         return reduce(lambda x_, y: x_.concatenate(y), batches)
 
@@ -1461,7 +1510,6 @@ class Sequential(Model):
     parameters?)
         Take batch norm parameters from whole of test set? or from whole of training set?
     """
-    # TODO: debug and see what happens when quantize is called
     # TODO: check time taken for evaluation to see if quantization has an effect
     def quantize(self):
         for layer in self.layers:
