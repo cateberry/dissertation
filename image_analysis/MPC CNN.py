@@ -62,7 +62,7 @@ Need a way to save the parameters of the trained MPC network
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    ReluNormal(order=3, approx_type='lagrange-uniform'),  # approx_type='taylor'),
+    ReluNormal(order=3, approx_type='regression'),  # approx_type='taylor'),
     # Relu(order=4),
     # ReluNormal(order=3),
     AveragePooling2D(pool_size=(2, 2)),
@@ -112,10 +112,10 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-x_train = x_train[:512]
-y_train = y_train[:512]
-x_test = x_test[:128]
-y_test = y_test[:128]
+x_train = x_train[:64]
+y_train = y_train[:64]
+x_test = x_test[:32]
+y_test = y_test[:32]
 
 tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
 batch_size = 32

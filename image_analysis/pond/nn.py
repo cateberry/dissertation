@@ -30,6 +30,8 @@ class Dense(Layer):
         self.bias = None
         self.initializer = None
         self.cache = None
+        self.quant_weights = None
+        self.quant_bias = None
 
     def initialize(self, input_shape, initializer=None, **_):
         if initializer is not None:
@@ -38,10 +40,23 @@ class Dense(Layer):
         output_shape = [input_shape[0]] + [self.num_nodes]
         return output_shape
 
-    def forward(self, x):
-        y = x.dot(self.weights) + self.bias
-        self.cache = x
-        return y
+    def quantize(self):
+        decrypted_weights = self.weights.reveal()
+        quanted_weights = quant_weights_MPC(decrypted_weights)
+        self.quant_weights = quanted_weights
+
+        decrypted_bias = self.bias.reveal()
+        quanted_bias = quant_weights_MPC(decrypted_bias)
+        self.quant_bias = quanted_bias
+
+    def forward(self, x, predict=False):
+        if predict is False:
+            y = x.dot(self.weights) + self.bias
+            self.cache = x
+            return y
+        else:
+            y = x.dot(self.quant_weights) + self.quant_bias
+            return y
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -191,22 +206,25 @@ class BatchNorm(Layer):
             weight_shape = [input_shape[-1], ]
             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
             self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
-            self.moving_mean = initializer(np.zeros(weight_shape))
-            self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
+            #self.moving_mean = initializer(np.zeros(weight_shape))
+            #self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
         return input_shape  # shape doesn't change after BN
 
-    def forward(self, x):
+    def quantize(self):
+        pass
+
+    def forward(self, x, predict=False):
         """
         Batch norm forward pass
         """
 
         denom = 1 / x.shape[1]  # mean in channel dimension
         batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-        self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
+        #self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
 
         batch_var_sum = (x - batch_mean).square()
         batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
-        self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
+        #self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
 
         numerator = x - batch_mean
         denominator = (batch_var + self.epsilon).sqrt()
@@ -304,7 +322,10 @@ class SoftmaxStable(Layer):
         self.cache = None
         return input_shape
 
-    def forward(self, x):
+    def quantize(self):
+        pass
+
+    def forward(self, x, predict=False):
         # we add the - x.max() for numerical stability, i.e. to prevent overflow
         likelihoods = (x - x.max(axis=1, keepdims=True)).clip(-10.0, np.inf).exp()
         probs = likelihoods.div(likelihoods.sum(axis=1, keepdims=True))
@@ -536,28 +557,43 @@ class ReluNormal(Layer):
         self.coeff = NativeTensor(self.compute_coeffs_normal(order, mu, sigma, n, approx_type))
         self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
         self.initializer = None
+        self.quant_coeff = None
+        self.quant_coeff_der = None
         assert order > 2
 
     @staticmethod
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
-        self.initializer = type(x)
+    def quantize(self):
+        quanted_coeffs = quant_weights_MPC(self.coeff)
+        self.quant_coeff = quanted_coeffs
 
-        n_dims = len(x.shape)
+        quanted_coeff_der = quant_weights_MPC(self.coeff_der)
+        self.quant_coeff_der = quanted_coeff_der
 
-        powers = [x, x.square()]
-        for i in range(self.order - 2):
-            powers.append(x * powers[-1])
-
-        # stack list into tensor
-        forward_powers = stack(powers).flip(axis=n_dims)
-        y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-
-        # cache all powers except the last
-        self.cache = stack(powers[:-1]).flip(axis=n_dims)
-        return y
+    def forward(self, x, predict=False):
+        if predict is False:
+            self.initializer = type(x)
+            n_dims = len(x.shape)
+            powers = [x, x.square()]
+            for i in range(self.order - 2):
+                powers.append(x * powers[-1])
+            # stack list into tensor
+            forward_powers = stack(powers).flip(axis=n_dims)
+            y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # cache all powers except the last
+            self.cache = stack(powers[:-1]).flip(axis=n_dims)
+            return y
+        else:
+            self.initializer = type(x)
+            n_dims = len(x.shape)
+            powers = [x, x.square()]
+            for i in range(self.order - 2):
+                powers.append(x * powers[-1])
+            forward_powers = stack(powers).flip(axis=n_dims)
+            y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            return y
 
     def backward(self, d_y, _):
         # the powers of the forward phase: x^1 ...x^order-1
@@ -711,7 +747,10 @@ class Flatten(Layer):
     def initialize(input_shape, **_):
         return [input_shape[0]] + [np.prod(input_shape[1:])]
 
-    def forward(self, x):
+    def quantize(self):
+        pass
+
+    def forward(self, x, predict=False):
         self.shape = x.shape
         y = x.reshape(x.shape[0], -1)
         return y
@@ -742,6 +781,8 @@ class Conv2D:
         self.filters = None
         self.bias = None
         self.model = None
+        self.quant_filters = None
+        self.quant_bias = None
         assert channels_first
 
     def initialize(self, input_shape, model=None, initializer=None):
@@ -760,14 +801,24 @@ class Conv2D:
     def quantize(self):
         decrypted_filters = self.filters.reveal()
         quanted_filters = quant_weights_MPC(decrypted_filters)
-        self.filters = quanted_filters
+        self.quant_filters = quanted_filters
+        self.
 
-    def forward(self, x):
-        self.cached_input_shape = x.shape
-        self.cache = x
-        out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
+        decrypted_bias = self.bias.reveal()
+        quanted_bias = quant_weights_MPC(decrypted_bias)
+        self.quant_bias = quanted_bias
+        # TODO: quantize over batch or over tensor within each batch?
+    def forward(self, x, predict=False):
+        if predict is False:
+            self.cached_input_shape = x.shape
+            self.cache = x
+            out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
 
-        return out + self.bias
+            return out + self.bias
+        else:
+            out = conv2d(x, self.quant_filters, self.strides, self.padding)
+
+            return out + self.quant_bias
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -889,7 +940,10 @@ class AveragePooling2D:
         s = (input_shape[2] - self.pool_size[0]) // self.strides + 1
         return input_shape[:2] + [s, s]
 
-    def forward(self, x):
+    def quantize(self):
+        pass
+
+    def forward(self, x, predict=False):
         # forward pass of average pooling, assumes NCHW data format
         s = (x.shape[2] - self.pool_size[0]) // self.strides + 1
         self.initializer = type(x)
@@ -1010,8 +1064,11 @@ class Reveal(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
+    def quantize(self):
+        pass
+
     @staticmethod
-    def forward(x):
+    def forward(x, predict=False):
         return x.reveal()
 
     @staticmethod
@@ -1094,6 +1151,12 @@ def conv2d(x, y, strides, padding, precomputed=None, save_mask=True):
             y_col = y.transpose(3, 2, 0, 1).reshape(n_filters, -1)
             out = y_col.dot(X_col).reshape(n_filters, h_out, w_out, n_x).transpose(3, 0, 1, 2)
             return out, X_col
+
+        # if isinstance(y, NativeTensor):
+        #     X_col = x.im2col(h_filter, w_filter, padding, strides)
+        #     y_col = y.transpose(3, 2, 0, 1).reshape(n_filters, -1)
+        #     out = y_col.dot(X_col).reshape(n_filters, h_out, w_out, n_x).transpose(3, 0, 1, 2)
+        #     return out, X_col
 
         if isinstance(y, PrivateEncodedTensor):
             if pond.tensor.USE_SPECIALIZED_TRIPLE:
@@ -1297,9 +1360,9 @@ class Sequential(Model):
         for layer in self.layers:
             input_shape = layer.initialize(input_shape=input_shape, initializer=initializer, model=self)
 
-    def forward(self, x):
+    def forward(self, x, predict=False):
         for layer in self.layers:
-            x = layer.forward(x)
+            x = layer.forward(x, predict)
         return x
 
     def backward(self, d_y, learning_rate):
@@ -1357,7 +1420,7 @@ class Sequential(Model):
                 if verbose >= 2:
                     print(datetime.now(), "Batch %s" % batch_index)
 
-                y_pred = self.forward(x_batch)
+                y_pred = self.forward(x_batch, False)
                 train_loss = loss.evaluate(y_pred, y_batch).unwrap()[0]
                 acc = np.mean(y_batch.unwrap().argmax(axis=1) == y_pred.unwrap().argmax(axis=1))
                 d_y = loss.derive(y_pred, y_batch)
@@ -1379,27 +1442,17 @@ class Sequential(Model):
                         # normal print
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
                                             train_loss=train_loss)
-        # Save parameters of network each epoch
-        # network_name = 'MPC_CNN' + str(datetime.now().strftime("%y%m%d-%H%M"))
-        # save_name = r'C:\Users\Cate\OneDrive\Documents\City stuff\dissertation\Code\image_analysis\saved_networks' + network_name
-        # with open(save_name + '.pickle', 'wb') as f:
-        #     pickle.dump({'conv_filters': self.layers.Conv2D.filters, 'conv_bias': self.layers.Conv2D.bias,
-        #                  'dense_weights': self.layers.Dense.weights, 'dense_bias': self.layers.Dense.bias,
-        #                  'relu_coeff': self.layers.ReluNormal.coeff, 'relu_coeff_der': self.layers.ReluNormal.coeff_der,
-        #                  'bn_gamma': self.layers.BatchNorm.gamma, 'bn_beta': self.layers.BatchNorm.beta},
-        #                 f, pickle.HIGHEST_PROTOCOL)
         # Newline after progressbar.
         print()
     # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
         # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
-        #self.quantize()
-
+        self.quantize()
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
         for batch_index, x_batch in enumerate(x.batches(batch_size)):
             if verbose >= 2: print(datetime.now(), "Batch %s" % batch_index)
-            y_batch = self.forward(x_batch)
+            y_batch = self.forward(x_batch, True)
             batches.append(y_batch)
         return reduce(lambda x_, y: x_.concatenate(y), batches)
 
@@ -1412,7 +1465,4 @@ class Sequential(Model):
     # TODO: check time taken for evaluation to see if quantization has an effect
     def quantize(self):
         for layer in self.layers:
-            try:
-                layer.quantize()
-            except:
-                pass
+            layer.quantize()
