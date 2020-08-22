@@ -13,6 +13,7 @@ import sympy as sym
 import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
+import mpmath
 
 
 class Layer:
@@ -440,7 +441,7 @@ def interpolation(f, psi, points):
     # Turn psi and f into Python functions
     x = sym.Symbol('x')
     psi = [sym.lambdify([x], psi[i]) for i in range(N+1)]
-    #f = sym.lambdify([x], f)
+    f = sym.lambdify([x], f)
     for i in range(N+1):
         for j in range(N+1):
             A[i, j] = psi[j](points[i])
@@ -452,7 +453,7 @@ def interpolation(f, psi, points):
     return u, c
 
 
-def least_squares(f, psi, Omega):
+def least_squares2(f, psi, omega):
     N = len(psi) - 1
     A = sym.zeros(N+1, N+1)
     b = sym.zeros(N+1, 1)
@@ -460,23 +461,50 @@ def least_squares(f, psi, Omega):
     for i in range(N+1):
         for j in range(i, N+1):
             integrand = psi[i]*psi[j]
-            I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+            I = sym.integrate(integrand, (x, omega[0], omega[1]))
             if isinstance(I, sym.Integral):
                 # Could not integrate symbolically, fall back
                 # on numerical integration with mpmath.quad
                 integrand = sym.lambdify([x], integrand)
-                I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
-            A[i, j] = A[j, i] = I
-        integrand = psi[i]*f  # TODO: look at source to figure out how to fix this (f is a fn in my case)
-        I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+                I = sym.mpmath.quad(integrand, [omega[0], omega[1]])
+            A[i,j] = A[j,i] = I
+        integrand = psi[i]*f
+        I = sym.integrate(integrand, (x, omega[0], omega[1]))
         if isinstance(I, sym.Integral):
             integrand = sym.lambdify([x], integrand)
-            I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
-        b[i, 0] = I
+            I = sym.mpmath.quad(integrand, [omega[0], omega[1]])
+        b[i,0] = I
     c = A.LUsolve(b)
-    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
+    c = [sym.simplify(c[i,0]) for i in range(c.shape[0])]
     u = sum(c[i]*psi[i] for i in range(len(psi)))
     return u, c
+
+
+# def least_squares1(f, psi, Omega):
+#     N = len(psi) - 1
+#     A = sym.zeros(N+1, N+1)
+#     b = sym.zeros(N+1, 1)
+#     x = sym.Symbol('x')
+#     for i in range(N+1):
+#         for j in range(i, N+1):
+#             integrand = psi[i]*psi[j]
+#             I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+#             if isinstance(I, sym.Integral):
+#                 # Could not integrate symbolically, fall back
+#                 # on numerical integration with mpmath.quad
+#                 integrand = sym.lambdify([x], integrand)
+#                 I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
+#             A[i, j] = A[j, i] = I
+#             integrand = psi[i]*f  # TODO: look at source to figure out how to fix this (f is a fn in my case)
+#         I = sym.integrate(integrand, (x, Omega[0], Omega[1]))
+#         if isinstance(I, sym.Integral):
+#             integrand = sym.lambdify([x], integrand)
+#             I = sym.mpmath.quad(integrand, [Omega[0], Omega[1]])
+#         b[i, 0] = I
+#     c = A.LUsolve(b)
+#     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
+#     u = sum(c[i]*psi[i] for i in range(len(psi)))
+#     return u, c
 
 
 def least_squares_numerical(f, psi, N, x,
@@ -487,18 +515,21 @@ def least_squares_numerical(f, psi, N, x,
     b = np.zeros(N+1)
     Omega = [x[0], x[-1]]
     dx = x[1] - x[0]
-
+    M = len(psi) - 1
+    y = sym.Symbol('y')
+    psi = [sym.lambdify([y], psi[i]) for i in range(M + 1)]
     for i in range(N+1):
         j_limit = i+1 if orthogonal_basis else N+1
         for j in range(i, j_limit):
+            f = lambda p: psi[i](p) * psi[j](p)
             if integration_method == 'scipy':
                 A_ij = scipy.integrate.quad(
-                    lambda x: psi(x,i)*psi(x,j),
-                    Omega[0], Omega[1], epsabs=1E-9, epsrel=1E-9)[0]
+                    # lambda x: psi(x, i)*psi(x, j),
+                    f, Omega[0], Omega[1], epsabs=1E-9, epsrel=1E-9)[0]
             elif integration_method == 'sympy':
-                A_ij = sym.mpmath.quad(
-                    lambda x: psi(x,i)*psi(x,j),
-                    [Omega[0], Omega[1]])
+                A_ij = mpmath.quad(
+                    # lambda x: psi(x,i)*psi(x,j),
+                    f, [Omega[0], Omega[1]])
             else:
                 values = psi(x,i)*psi(x,j)
                 A_ij = trapezoidal(values, dx)
@@ -509,7 +540,7 @@ def least_squares_numerical(f, psi, N, x,
                 lambda x: f(x)*psi(x,i), Omega[0], Omega[1],
                 epsabs=1E-9, epsrel=1E-9)[0]
         elif integration_method == 'sympy':
-            b_i = sym.mpmath.quad(
+            b_i = mpmath.quad(
                 lambda x: f(x)*psi(x,i), [Omega[0], Omega[1]])
         else:
             values = f(x)*psi(x,i)
@@ -566,34 +597,32 @@ def comparison_plot(f, u, Omega):
     plt.show()
 
 
-def approximate_lagrange(order, point_dist='uniform'):
+def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     x = sym.Symbol('x')
-    # f = (x > 0) * x
-    f = lambda y: (y > 0) * y
+    f = sym.Max(x, 0)
+    f2 = lambda y: (y > 0) * y
     n_points = order
-    psi, points = Lagrange_polynomials(x, n_points, [-3, 3], point_distribution=point_dist)
+    omega = [-3, 3]
+    psi, points = Lagrange_polynomials(x, n_points, omega, point_distribution=point_dist)
     print(psi, points)
-    # u, c = interpolation(f, psi, points)
-    # u, c = least_squares(f, psi, points)
-    N = 20
-    u, c = least_squares_numerical(f, psi, N, x, integration_method='scipy', orthogonal_basis=False)
-
-    # try: coeffs_1 = [list(u.args[i].as_coefficients_dict().values())[0] for i in range(1, len(u.args))]
-    # except: coeffs_1 = [list(u.args[1][i].as_coefficients_dict().values())[0] for i in range(1, len(u.args[1]))]
-    # coeffs = [u.args[0]] + coeffs_1
+    if method=='interpolation':
+        u, c = interpolation(f, psi, points)
+    else:
+        u, c = least_squares2(f, psi, omega)
+    # N = 20
+    # x = np.linspace(0, 2 * np.pi, 501)
+    # u, c = least_squares_numerical(f, psi, N, x, integration_method='sympy', orthogonal_basis=False)
 
     coeff_list = []
     order = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
     i = 0
-    expression = u
-    if n_points >= 4:
-        expression = u.expand()
+    expression = u.expand()
     while i < len(order):
         coeff_list.append(expression.as_coefficients_dict()[order[i]])
         i += 1
 
     coeffs = np.array(coeff_list[:n_points + 1])
-    comparison_plot(f, u, [-3, 3])
+    comparison_plot(f2, u, omega)
     return coeffs
 
 class ReluNormal(Layer):
