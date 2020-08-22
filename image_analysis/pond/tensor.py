@@ -192,8 +192,12 @@ class NativeTensor:
         return NativeTensor.from_values(x.values.min(axis=axis, keepdims=keepdims))
 
     def exp(x):
-        return NativeTensor(np.exp(x.values))
-
+        try:
+            return NativeTensor(np.exp(x.values))
+        except:
+            values = x.values.astype(int)
+            return NativeTensor(np.exp(values))
+    # TODO: seems like this fixes the error but unclear what impact it has on accuracy etc.
     def round(x):
         return NativeTensor(np.round(x.values))
 
@@ -225,11 +229,12 @@ class NativeTensor:
         return NativeTensor(col2im(x.values, imshape, field_height, field_width, padding, stride))
 
 
-DTYPE = 'object'
-#Q = 2657003489534545107915232808830590043  # prime
+# DTYPE = 'object'
+DTYPE = 'float'  # TODO: test for solving exp error
+Q = 2657003489534545107915232808830590043  # prime
 #Q = 2658455991569831745807614120560689152  # 2**121
-two_exp = 121
-Q = 2 ** two_exp
+# two_exp = 121
+# Q = 2 ** two_exp
 
 
 # For arbitrary precision integers.
