@@ -44,11 +44,11 @@ class Dense(Layer):
     def quantize(self):
         decrypted_weights = self.weights.reveal()
         quanted_weights = quant_weights_MPC(decrypted_weights)
-        self.quant_weights = quanted_weights
+        self.quant_weights = PrivateEncodedTensor(quanted_weights.values)
 
         decrypted_bias = self.bias.reveal()
         quanted_bias = quant_weights_MPC(decrypted_bias)
-        self.quant_bias = quanted_bias
+        self.quant_bias = PrivateEncodedTensor(quanted_bias.values)
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -89,8 +89,8 @@ class BatchNorm(Layer):
             weight_shape = [input_shape[-1], ]
             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
             self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
-            #self.moving_mean = initializer(np.zeros(weight_shape))
-            #self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
+            # self.moving_mean = initializer(np.zeros(weight_shape))
+            # self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
         return input_shape  # shape doesn't change after BN
 
     def quantize(self):
@@ -103,11 +103,11 @@ class BatchNorm(Layer):
 
         denom = 1 / x.shape[1]  # mean in channel dimension
         batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-        #self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
+        # self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
 
         batch_var_sum = (x - batch_mean).square()
         batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
-        #self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
+        # self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
 
         numerator = x - batch_mean
         denominator = (batch_var + self.epsilon).sqrt()
@@ -285,7 +285,10 @@ class Relu(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def quantize(self):
+        pass
+
+    def forward(self, x, predict=False):
         self.initializer = type(x)
 
         n_dims = len(x.shape)
@@ -320,48 +323,48 @@ class Relu(Layer):
 
 def interpolation(f, psi, points):
     N = len(psi) - 1
-    A = sym.zeros(N+1, N+1)
-    b = sym.zeros(N+1, 1)
+    A = sym.zeros(N + 1, N + 1)
+    b = sym.zeros(N + 1, 1)
     psi_sym = psi  # save symbolic expression
     # Turn psi and f into Python functions
     x = sym.Symbol('x')
-    psi = [sym.lambdify([x], psi[i]) for i in range(N+1)]
+    psi = [sym.lambdify([x], psi[i]) for i in range(N + 1)]
     f = sym.lambdify([x], f)
-    for i in range(N+1):
-        for j in range(N+1):
+    for i in range(N + 1):
+        for j in range(N + 1):
             A[i, j] = psi[j](points[i])
         b[i, 0] = f(points[i])
     c = A.LUsolve(b)
     # c is a sympy Matrix object, turn to list
     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
-    u = sym.simplify(sum(c[i]*psi_sym[i] for i in range(N+1)))
+    u = sym.simplify(sum(c[i] * psi_sym[i] for i in range(N + 1)))
     return u, c
 
 
 def least_squares2(f, psi, omega):
     N = len(psi) - 1
-    A = sym.zeros(N+1, N+1)
-    b = sym.zeros(N+1, 1)
+    A = sym.zeros(N + 1, N + 1)
+    b = sym.zeros(N + 1, 1)
     x = sym.Symbol('x')
-    for i in range(N+1):
-        for j in range(i, N+1):
-            integrand = psi[i]*psi[j]
+    for i in range(N + 1):
+        for j in range(i, N + 1):
+            integrand = psi[i] * psi[j]
             I = sym.integrate(integrand, (x, omega[0], omega[1]))
             if isinstance(I, sym.Integral):
                 # Could not integrate symbolically, fall back
                 # on numerical integration with mpmath.quad
                 integrand = sym.lambdify([x], integrand)
                 I = sym.mpmath.quad(integrand, [omega[0], omega[1]])
-            A[i,j] = A[j,i] = I
-        integrand = psi[i]*f
+            A[i, j] = A[j, i] = I
+        integrand = psi[i] * f
         I = sym.integrate(integrand, (x, omega[0], omega[1]))
         if isinstance(I, sym.Integral):
             integrand = sym.lambdify([x], integrand)
             I = sym.mpmath.quad(integrand, [omega[0], omega[1]])
-        b[i,0] = I
+        b[i, 0] = I
     c = A.LUsolve(b)
-    c = [sym.simplify(c[i,0]) for i in range(c.shape[0])]
-    u = sum(c[i]*psi[i] for i in range(len(psi)))
+    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
+    u = sum(c[i] * psi[i] for i in range(len(psi)))
     return u, c
 
 
@@ -396,15 +399,15 @@ def least_squares_numerical(f, psi, N, x,
                             integration_method='scipy',
                             orthogonal_basis=False):
     import scipy.integrate
-    A = np.zeros((N+1, N+1))
-    b = np.zeros(N+1)
+    A = np.zeros((N + 1, N + 1))
+    b = np.zeros(N + 1)
     Omega = [x[0], x[-1]]
     dx = x[1] - x[0]
     M = len(psi) - 1
     y = sym.Symbol('y')
     psi = [sym.lambdify([y], psi[i]) for i in range(M + 1)]
-    for i in range(N+1):
-        j_limit = i+1 if orthogonal_basis else N+1
+    for i in range(N + 1):
+        j_limit = i + 1 if orthogonal_basis else N + 1
         for j in range(i, j_limit):
             f = lambda p: psi[i](p) * psi[j](p)
             if integration_method == 'scipy':
@@ -416,29 +419,30 @@ def least_squares_numerical(f, psi, N, x,
                     # lambda x: psi(x,i)*psi(x,j),
                     f, [Omega[0], Omega[1]])
             else:
-                values = psi(x,i)*psi(x,j)
+                values = psi(x, i) * psi(x, j)
                 A_ij = trapezoidal(values, dx)
-            A[i,j] = A[j,i] = A_ij
+            A[i, j] = A[j, i] = A_ij
 
         if integration_method == 'scipy':
             b_i = scipy.integrate.quad(
-                lambda x: f(x)*psi(x,i), Omega[0], Omega[1],
+                lambda x: f(x) * psi(x, i), Omega[0], Omega[1],
                 epsabs=1E-9, epsrel=1E-9)[0]
         elif integration_method == 'sympy':
             b_i = mpmath.quad(
-                lambda x: f(x)*psi(x,i), [Omega[0], Omega[1]])
+                lambda x: f(x) * psi(x, i), [Omega[0], Omega[1]])
         else:
-            values = f(x)*psi(x,i)
+            values = f(x) * psi(x, i)
             b_i = trapezoidal(values, dx)
         b[i] = b_i
 
-    c = b/np.diag(A) if orthogonal_basis else np.linalg.solve(A, b)
-    u = sum(c[i]*psi(x, i) for i in range(N+1))
+    c = b / np.diag(A) if orthogonal_basis else np.linalg.solve(A, b)
+    u = sum(c[i] * psi(x, i) for i in range(N + 1))
     return u, c
+
 
 def trapezoidal(values, dx):
     """Integrate values by the Trapezoidal rule (mesh size dx)."""
-    return dx*(np.sum(values) - 0.5*values[0] - 0.5*values[-1])
+    return dx * (np.sum(values) - 0.5 * values[0] - 0.5 * values[-1])
 
 
 def Lagrange_polynomial(x, i, points):
@@ -510,6 +514,7 @@ def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     comparison_plot(f2, u, omega)
     return coeffs
 
+
 class ReluNormal(Layer):
 
     def __init__(self, order, mu=0.0, sigma=1.0, n=1000, approx_type='regression'):
@@ -530,10 +535,10 @@ class ReluNormal(Layer):
 
     def quantize(self):
         quanted_coeffs = quant_weights_MPC(self.coeff)
-        self.quant_coeff = quanted_coeffs
+        self.quant_coeff = PrivateEncodedTensor(quanted_coeffs.values)
 
         quanted_coeff_der = quant_weights_MPC(self.coeff_der)
-        self.quant_coeff_der = quanted_coeff_der
+        self.quant_coeff_der = PrivateEncodedTensor(quanted_coeff_der.values)
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -766,12 +771,13 @@ class Conv2D:
     def quantize(self):
         decrypted_filters = self.filters.reveal()
         quanted_filters = quant_weights_MPC(decrypted_filters)
-        self.quant_filters = quanted_filters
+        self.quant_filters = PrivateEncodedTensor(quanted_filters.values)
 
         decrypted_bias = self.bias.reveal()
         quanted_bias = quant_weights_MPC(decrypted_bias)
-        self.quant_bias = quanted_bias
+        self.quant_bias = PrivateEncodedTensor(quanted_bias.values)
         # TODO: quantize over batch or over tensor within each batch?
+
     def forward(self, x, predict=False):
         if predict is False:
             self.cached_input_shape = x.shape
@@ -780,7 +786,7 @@ class Conv2D:
 
             return out + self.bias
         else:
-            out = conv2d(x, self.quant_filters, self.strides, self.padding)
+            out, X_col = conv2d(x, self.quant_filters, self.strides, self.padding)
 
             return out + self.quant_bias
 
@@ -999,7 +1005,7 @@ def quant_weights(weights):
     in_range = np.max(weights) - np.min(weights)
     out_range = 255
     slope = out_range / in_range
-    quanted_weights = np.round(0 + slope * (weights - np.min(weights))).astype(np.uint8)
+    quanted_weights = np.round(- 127 + slope * (weights - np.min(weights))).astype(np.uint8)
 
     return quanted_weights
 
@@ -1010,7 +1016,6 @@ def quant_weights_MPC(weights):
     out_range = 255
     slope = in_range.inv() * out_range
     quanted_weights = ((weights - weights.min()) * slope + 0).round().convert_uint8()
-
     return quanted_weights
 
 
@@ -1334,9 +1339,9 @@ class Sequential(Model):
                                             train_loss=train_loss)
         # Newline after progressbar.
         print()
+
     # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
-        # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
         self.quantize()
         predict = True
         if not isinstance(x, DataLoader): x = DataLoader(x)
@@ -1352,6 +1357,7 @@ class Sequential(Model):
     parameters?)
         Take batch norm parameters from whole of test set? or from whole of training set?
     """
+
     # TODO: check time taken for evaluation to see if quantization has an effect
     def quantize(self):
         for layer in self.layers:
