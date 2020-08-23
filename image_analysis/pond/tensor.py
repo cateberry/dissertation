@@ -195,8 +195,9 @@ class NativeTensor:
         try:
             return NativeTensor(np.exp(x.values))
         except:
-            values = x.values.astype(int)
-            return NativeTensor(np.exp(values))
+            values = x.values.astype(np.float64)  # TODO: debug to check values before and after changing dtype
+            values_exp = np.exp(values)
+            return NativeTensor(values_exp.astype(object))
     # TODO: seems like this fixes the error but unclear what impact it has on accuracy etc.
     def round(x):
         return NativeTensor(np.round(x.values))
@@ -206,7 +207,10 @@ class NativeTensor:
 
     def log(x):
         # use this log to set log 0 -> -10^2
-        return NativeTensor(np.ma.log(x.values).filled(-1e2))
+        try:
+            return NativeTensor(np.ma.log(x.values).filled(-1e2))
+        except:
+            return NativeTensor(np.ma.log(x.values.astype(np.float64)).filled(-1e2).astype(object))
 
     def inv(x):
         return NativeTensor(1. / x.values)
@@ -229,8 +233,8 @@ class NativeTensor:
         return NativeTensor(col2im(x.values, imshape, field_height, field_width, padding, stride))
 
 
-# DTYPE = 'object'
-DTYPE = 'float'  # TODO: test for solving exp error
+DTYPE = 'object'
+# DTYPE = 'float'  # TODO: test for solving exp error
 Q = 2657003489534545107915232808830590043  # prime
 #Q = 2658455991569831745807614120560689152  # 2**121
 # two_exp = 121

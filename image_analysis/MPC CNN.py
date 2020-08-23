@@ -3,7 +3,7 @@ import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
 from pond.nn import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, BatchNorm, ReluNormal#, ReluGalois, Conv2DQuant, DenseQuant
+    AveragePooling2D, Flatten, BatchNorm, ReluNormal, Softmax
 from keras.utils import to_categorical
 
 
@@ -23,9 +23,9 @@ _ = np.seterr(invalid='raise')
 """
 
 (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-x_train = x_train.astype(np.uint8)
+x_train = x_train.astype(np.uint8)  # TODO: test this?
 x_test = x_test.astype(np.uint8)
-x_train = x_train[:, np.newaxis, :, :] / 255.0
+x_train = x_train[:, np.newaxis, :, :] / 255.0  # TODO: test without normalising
 x_test = x_test[:, np.newaxis, :, :] / 255.0
 # x_train = x_train[:, np.newaxis, :, :]
 # x_test = x_test[:, np.newaxis, :, :]
@@ -50,7 +50,7 @@ Need a way to save the parameters of the trained MPC network
 #     #Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
 #     Conv2DQuant((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
 #     BatchNorm(),
-#     ReluGalois(order=4, mu=0.0, sigma=1.0),     # TODO: investigate overflow error
+#     ReluGalois(order=4, mu=0.0, sigma=1.0),
 #     AveragePooling2D(pool_size=(2, 2)),
 #     Flatten(),
 #     # Dense(10, 6272),  # 3136 5408 6272

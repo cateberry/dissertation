@@ -74,124 +74,6 @@ class Dense(Layer):
         return d_x
 
 
-class DenseQuant(Layer):
-
-    def __init__(self, num_nodes, num_features, initial_scale=.01, l2reg_lambda=0.0):
-        self.num_nodes = num_nodes
-        self.num_features = num_features
-        self.initial_scale = initial_scale
-        self.l2reg_lambda = l2reg_lambda
-        self.weights = None
-        self.bias = None
-        self.initializer = None
-        self.cache = None
-
-    def initialize(self, input_shape, initializer=None, **_):
-        if initializer is not None:
-            init_weights = np.random.randn(self.num_features, self.num_nodes) * self.initial_scale
-            quanted_weights = quant_weights(init_weights)
-            self.weights = initializer(quanted_weights)
-            self.bias = initializer(np.zeros((1, self.num_nodes)))
-        output_shape = [input_shape[0]] + [self.num_nodes]
-        return output_shape
-
-    def forward(self, x):
-        y = x.dot(self.weights) + self.bias
-        self.cache = x
-        return y
-
-    def backward(self, d_y, learning_rate):
-        x = self.cache
-        d_x = d_y.dot(self.weights.transpose())
-        d_weights = x.transpose().dot(d_y)
-        if self.l2reg_lambda > 0:
-            d_weights = d_weights + self.weights * (self.l2reg_lambda / x.shape[0])
-
-        d_bias = d_y.sum(axis=0)
-        # update weights and bias
-        self.weights = (d_weights * learning_rate).neg() + self.weights
-        self.bias = (d_bias * learning_rate).neg() + self.bias
-
-        return d_x
-
-
-# class BatchNormOld(Layer):
-#     def __init__(self):
-#         self.cache = None
-#         self.epsilon = 2 ** -10
-#         self.beta = None
-#         self.gamma = None
-#         self.moving_mean = None
-#         self.moving_var = None
-#         self.initializer = None
-#
-#     def initialize(self, input_shape, initializer=None, **_):
-#         if initializer is not None:
-#             weight_shape = [input_shape[-1], ]
-#             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
-#             self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
-#             self.moving_mean = initializer(np.zeros(weight_shape))
-#             self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
-#         return input_shape  # shape doesn't change after BN
-#
-#     def forward(self, x):
-#         """
-#         Batch norm forward pass with separate methods for training and classification
-#         """
-#         if not prediction:
-#             denom = 1 / x.shape[1]  # mean in channel dimension
-#             batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-#             self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
-#
-#             batch_var_sum = (x - batch_mean).square()
-#             batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
-#             self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
-#
-#             numerator = x - batch_mean
-#             denominator = (batch_var + self.epsilon).sqrt()
-#             denom_inv = denominator.inv()
-#             norm = numerator * denom_inv
-#             bn_approx = norm * self.gamma + self.beta
-#             self.cache = numerator, denominator, norm, self.gamma, denom_inv
-#
-#             return bn_approx
-#         else:
-#             batch_mean = self.moving_mean
-#             batch_var = self.moving_var
-#
-#             numerator = x - batch_mean
-#             denominator = (batch_var + self.epsilon).inv_sqrt()
-#
-#             norm = numerator * denominator
-#             bn_approx = norm * self.gamma + self.beta
-#
-#             return bn_approx
-#
-#     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
-#         N, D = d_y.shape[-2], d_y.shape[-1]
-#
-#         numerator, denominator, norm, gamma, denom_inv = self.cache
-#         d_gamma = (d_y * norm).sum(axis=1, keepdims=True)  # dL/dgamma = dL/dy * dy/dgamma
-#         d_beta = d_y.sum(axis=1, keepdims=True)
-#
-#         d_norm = d_y * gamma
-#         # For debugging:
-#         # d_x1 = d_norm * N
-#         # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
-#         # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
-#         # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
-#         # d_x = d_x4.inv() * (1 / N)
-#
-#         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
-#                                                                                                           keepdims=True))).inv() * (
-#                           1 / N)
-#
-#         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
-#         self.beta = (d_beta * learning_rate).neg() + self.beta
-#
-#         return d_x
-
-
 class BatchNorm(Layer):
     def __init__(self):
         self.cache = None
@@ -351,7 +233,10 @@ class Softmax(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def quantize(self):
+        pass
+
+    def forward(self, x, predict=False):
         exp = x.exp()
         probs = exp.div(exp.sum(axis=1, keepdims=True))
         self.cache = probs
@@ -605,7 +490,7 @@ def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     omega = [-3, 3]
     psi, points = Lagrange_polynomials(x, n_points, omega, point_distribution=point_dist)
     print(psi, points)
-    if method=='interpolation':
+    if method == 'interpolation':
         u, c = interpolation(f, psi, points)
     else:
         u, c = least_squares2(f, psi, omega)
@@ -698,9 +583,11 @@ class ReluNormal(Layer):
             # Fit a Taylor polynomial
             taylor_approx = approximate_taylor_polynomial(self.relu, 0, order, 3)  # TODO: experiment with scale
             coeffs = taylor_approx.coeffs
-        elif approx_type == 'lagrange-uniform':  # TODO: experiment with parameters
+        elif approx_type == 'lagrange-uniform-interpolate':  # TODO: experiment with parameters
             # Fit a Lagrange polynomial with equidistant points over interval
-            coeffs = approximate_lagrange(order, 'uniform')
+            coeffs = approximate_lagrange(order, point_dist='uniform', method='interpolation')
+        elif approx_type == 'lagrange-uniform-leastsquares':
+            coeffs = approximate_lagrange(order, point_dist='uniform', method='leastsquares')
         elif approx_type == 'lagrange-chebyshev':  # TODO: experiment with number of points
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             coeffs = approximate_lagrange(order, 'chebyshev')
@@ -896,80 +783,6 @@ class Conv2D:
             out = conv2d(x, self.quant_filters, self.strides, self.padding)
 
             return out + self.quant_bias
-
-    def backward(self, d_y, learning_rate):
-        x = self.cache
-        h_filter, w_filter, d_filter, n_filter = self.filters.shape
-        dx = None
-
-        if self.model.layers.index(self) != 0:
-            W_reshaped = self.filters.reshape(n_filter, -1).transpose()
-            dout_reshaped = d_y.transpose(1, 2, 3, 0).reshape(n_filter, -1)
-            dx = W_reshaped.dot(dout_reshaped).col2im(imshape=self.cached_input_shape, field_height=h_filter,
-                                                      field_width=w_filter, padding=self.padding, stride=self.strides)
-
-        d_w = conv2d_bw(x, d_y, self.cached_x_col, self.filters.shape, padding=self.padding, strides=self.strides)
-        d_bias = d_y.sum(axis=0)
-
-        if self.l2reg_lambda > 0:
-            d_w = d_w + self.filters * (self.l2reg_lambda / self.cached_input_shape[0])
-
-        self.filters = (d_w * learning_rate).neg() + self.filters
-        self.bias = (d_bias * learning_rate).neg() + self.bias
-
-        return dx
-
-
-class Conv2DQuant:
-    def __init__(self, fshape, strides=1, padding=0, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp),
-                 l2reg_lambda=0.0, channels_first=True):
-        """ 2 Dimensional convolutional layer, expects NCHW data format
-            fshape: tuple of rank 4
-            strides: int with stride size
-            filter init: lambda function with shape parameter
-            Example: Conv2D((4, 4, 1, 20), strides=2, filter_init=lambda shp: np.random.normal(scale=0.01,
-            size=shp))
-        """
-        self.fshape = fshape
-        self.strides = strides
-        self.padding = padding
-        self.filter_init = filter_init
-        self.l2reg_lambda = l2reg_lambda
-        self.cache = None
-        self.cached_x_col = None
-        self.cached_input_shape = None
-        self.initializer = None
-        self.filters = None
-        self.bias = None
-        self.model = None
-        assert channels_first
-
-    def initialize(self, input_shape, model=None, initializer=None):
-        self.model = model
-
-        h_filter, w_filter, d_filters, n_filters = self.fshape
-        n_x, d_x, h_x, w_x = input_shape
-        h_out = int((h_x - h_filter + 2 * self.padding) / self.strides + 1)
-        w_out = int((w_x - w_filter + 2 * self.padding) / self.strides + 1)
-
-        self.bias = initializer(np.zeros((n_filters, h_out, w_out)))
-
-        init_filters = self.filter_init(self.fshape)  # Initialises with values from normal distribution
-        # in_range = max(init_filters) - min(init_filters)
-        # out_range = 255
-        # slope = out_range / in_range
-        quant_filters = quant_weights(init_filters)
-
-        self.filters = initializer(quant_filters)
-
-        return [n_x, n_filters, h_out, w_out]
-
-    def forward(self, x):
-        self.cached_input_shape = x.shape
-        self.cache = x
-        out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
-
-        return out + self.bias
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -1514,7 +1327,7 @@ class Sequential(Model):
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
                                             train_loss=train_loss,
                                             val_loss=val_loss, val_acc=val_acc)
-                        print()  # TODO: see if this works
+                        print()
                     else:
                         # normal print
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
@@ -1524,8 +1337,8 @@ class Sequential(Model):
     # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
         # layers_to_quant = [Conv2D.get_filters(), Conv2D.bias, Dense.weights, Dense.bias, ReluNormal.coeff, ReluNormal.coeff_der]
-        #self.quantize()
-        predict = False
+        self.quantize()
+        predict = True
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
         for batch_index, x_batch in enumerate(x.batches(batch_size)):
