@@ -49,10 +49,10 @@ class Dense(Layer):
         # quanted_bias = quant_weights_MPC(decrypted_bias)
         # self.quant_bias = quanted_bias
 
-        quanted_weights = quant_weights_tensor(self.weights)
+        quanted_weights = quant_weights_ReLU(self.weights.reveal())
         self.quant_weights = quanted_weights
 
-        quanted_bias = quant_weights_tensor(self.bias)
+        quanted_bias = quant_weights_ReLU(self.bias.reveal())
         self.quant_bias = quanted_bias
 
 
@@ -457,16 +457,13 @@ def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     f = sym.Max(x, 0)
     f2 = lambda y: (y > 0) * y
     n_points = order
-    omega = [-3, 3]
+    omega = [-1, 1]
     psi, points = Lagrange_polynomials(x, n_points, omega, point_distribution=point_dist)
     print(psi, points)
     if method == 'interpolation':
         u, c = interpolation(f, psi, points)
     else:
         u, c = least_squares2(f, psi, omega)
-    # N = 20
-    # x = np.linspace(0, 2 * np.pi, 501)
-    # u, c = least_squares_numerical(f, psi, N, x, integration_method='sympy', orthogonal_basis=False)
 
     coeff_list = []
     order = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
@@ -500,10 +497,10 @@ class ReluNormal(Layer):
         return input_shape
 
     def quantize(self):
-        quanted_coeffs = quant_weights_MPC(self.coeff)
+        quanted_coeffs = quant_weights_ReLU(self.coeff.reveal())
         self.quant_coeff = quanted_coeffs
 
-        quanted_coeff_der = quant_weights_MPC(self.coeff_der)
+        quanted_coeff_der = quant_weights_ReLU(self.coeff_der.reveal())
         self.quant_coeff_der = quanted_coeff_der
 
     def forward(self, x, predict=False):
@@ -735,21 +732,14 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        # decrypted_filters = self.filters.reveal()
-        # quanted_filters = quant_weights_MPC(decrypted_filters)
-        # self.quant_filters = quanted_filters
-        #
-        # decrypted_bias = self.bias.reveal()
-        # quanted_bias = quant_weights_MPC(decrypted_bias)
-        # self.quant_bias = quanted_bias
-        # TODO: quantize over batch or over tensor within each batch?
-        quanted_filters = quant_weights_tensor(self.filters)
+        decrypted_filters = self.filters.reveal()
+        quanted_filters = quant_weights_MPC(decrypted_filters)
         self.quant_filters = quanted_filters
 
-        quanted_bias = quant_weights_tensor(self.bias)
+        decrypted_bias = self.bias.reveal()
+        quanted_bias = quant_weights_ReLU(decrypted_bias)
         self.quant_bias = quanted_bias
-
-
+        # TODO: quantize over batch or over tensor within each batch?
     def forward(self, x, predict=False):
         if predict is False:
             self.cached_input_shape = x.shape
@@ -977,19 +967,27 @@ def quant_weights(weights):
     in_range = np.max(weights) - np.min(weights)
     out_range = 255
     slope = out_range / in_range
-    quanted_weights = np.round(- 127 + slope * (weights - np.min(weights))).astype(np.uint8)
+    quanted_weights = np.round(0 + slope * (weights - np.min(weights))).astype(np.uint8)
 
     return quanted_weights
 
 
 def quant_weights_MPC(weights):
     """For NativeTensors"""
+    in_range = weights.max(axis=(1, 2), keepdims=True) - weights.min(axis=(1, 2), keepdims=True)
+    out_range = 255
+    slope = in_range.inv() * out_range
+    quanted_weights = ((weights - weights.min(axis=(1, 2), keepdims=True)) * slope + 0).round().convert_uint8()
+    return PrivateEncodedTensor(quanted_weights.values.astype(object))
+
+
+def quant_weights_ReLU(weights):
+    """For NativeTensors"""
     in_range = weights.max() - weights.min()
     out_range = 255
     slope = in_range.inv() * out_range
     quanted_weights = ((weights - weights.min()) * slope + 0).round().convert_uint8()
     return PrivateEncodedTensor(quanted_weights.values.astype(object))
-
 #
 # def quant_weights_tensor(weights):
 #     """For NativeTensors
