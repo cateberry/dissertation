@@ -9,11 +9,10 @@ import math
 import time
 import pond
 from scipy.interpolate import approximate_taylor_polynomial
-import sympy as sym
 import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
-import mpmath
+#import tensorflow as tf
 
 
 class Layer:
@@ -42,13 +41,20 @@ class Dense(Layer):
         return output_shape
 
     def quantize(self):
-        decrypted_weights = self.weights.reveal()
-        quanted_weights = quant_weights_MPC(decrypted_weights)
-        self.quant_weights = PrivateEncodedTensor(quanted_weights.values)
+        # decrypted_weights = self.weights.reveal()
+        # quanted_weights = quant_weights_MPC(decrypted_weights)
+        # self.quant_weights = quanted_weights
+        #
+        # decrypted_bias = self.bias.reveal()
+        # quanted_bias = quant_weights_MPC(decrypted_bias)
+        # self.quant_bias = quanted_bias
 
-        decrypted_bias = self.bias.reveal()
-        quanted_bias = quant_weights_MPC(decrypted_bias)
-        self.quant_bias = PrivateEncodedTensor(quanted_bias.values)
+        quanted_weights = quant_weights_tensor(self.weights)
+        self.quant_weights = quanted_weights
+
+        quanted_bias = quant_weights_tensor(self.bias)
+        self.quant_bias = quanted_bias
+
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -286,24 +292,34 @@ class Relu(Layer):
         return input_shape
 
     def quantize(self):
-        pass
+        quanted_coeffs = quant_weights_MPC(self.coeff)
+        self.quant_coeff = quanted_coeffs
+
+        quanted_coeff_der = quant_weights_MPC(self.coeff_der)
+        self.quant_coeff_der = quanted_coeff_der
 
     def forward(self, x, predict=False):
-        self.initializer = type(x)
-
-        n_dims = len(x.shape)
-
-        powers = [x, x.square()]
-        for i in range(self.order - 2):
-            powers.append(x * powers[-1])
-
-        # stack list into tensor
-        forward_powers = stack(powers).flip(axis=n_dims)
-        y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-
-        # cache all powers except the last
-        self.cache = stack(powers[:-1]).flip(axis=n_dims)
-        return y
+        if predict is False:
+            self.initializer = type(x)
+            n_dims = len(x.shape)
+            powers = [x, x.square()]
+            for i in range(self.order - 2):
+                powers.append(x * powers[-1])
+            # stack list into tensor
+            forward_powers = stack(powers).flip(axis=n_dims)
+            y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # cache all powers except the last
+            self.cache = stack(powers[:-1]).flip(axis=n_dims)
+            return y
+        else:
+            self.initializer = type(x)
+            n_dims = len(x.shape)
+            powers = [x, x.square()]
+            for i in range(self.order - 2):
+                powers.append(x * powers[-1])
+            forward_powers = stack(powers).flip(axis=n_dims)
+            y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            return y
 
     def backward(self, d_y, _):
         # the powers of the forward phase: x^1 ...x^order-1
@@ -393,56 +409,6 @@ def least_squares2(f, psi, omega):
 #     c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
 #     u = sum(c[i]*psi[i] for i in range(len(psi)))
 #     return u, c
-
-
-def least_squares_numerical(f, psi, N, x,
-                            integration_method='scipy',
-                            orthogonal_basis=False):
-    import scipy.integrate
-    A = np.zeros((N + 1, N + 1))
-    b = np.zeros(N + 1)
-    Omega = [x[0], x[-1]]
-    dx = x[1] - x[0]
-    M = len(psi) - 1
-    y = sym.Symbol('y')
-    psi = [sym.lambdify([y], psi[i]) for i in range(M + 1)]
-    for i in range(N + 1):
-        j_limit = i + 1 if orthogonal_basis else N + 1
-        for j in range(i, j_limit):
-            f = lambda p: psi[i](p) * psi[j](p)
-            if integration_method == 'scipy':
-                A_ij = scipy.integrate.quad(
-                    # lambda x: psi(x, i)*psi(x, j),
-                    f, Omega[0], Omega[1], epsabs=1E-9, epsrel=1E-9)[0]
-            elif integration_method == 'sympy':
-                A_ij = mpmath.quad(
-                    # lambda x: psi(x,i)*psi(x,j),
-                    f, [Omega[0], Omega[1]])
-            else:
-                values = psi(x, i) * psi(x, j)
-                A_ij = trapezoidal(values, dx)
-            A[i, j] = A[j, i] = A_ij
-
-        if integration_method == 'scipy':
-            b_i = scipy.integrate.quad(
-                lambda x: f(x) * psi(x, i), Omega[0], Omega[1],
-                epsabs=1E-9, epsrel=1E-9)[0]
-        elif integration_method == 'sympy':
-            b_i = mpmath.quad(
-                lambda x: f(x) * psi(x, i), [Omega[0], Omega[1]])
-        else:
-            values = f(x) * psi(x, i)
-            b_i = trapezoidal(values, dx)
-        b[i] = b_i
-
-    c = b / np.diag(A) if orthogonal_basis else np.linalg.solve(A, b)
-    u = sum(c[i] * psi(x, i) for i in range(N + 1))
-    return u, c
-
-
-def trapezoidal(values, dx):
-    """Integrate values by the Trapezoidal rule (mesh size dx)."""
-    return dx * (np.sum(values) - 0.5 * values[0] - 0.5 * values[-1])
 
 
 def Lagrange_polynomial(x, i, points):
@@ -535,10 +501,10 @@ class ReluNormal(Layer):
 
     def quantize(self):
         quanted_coeffs = quant_weights_MPC(self.coeff)
-        self.quant_coeff = PrivateEncodedTensor(quanted_coeffs.values)
+        self.quant_coeff = quanted_coeffs
 
         quanted_coeff_der = quant_weights_MPC(self.coeff_der)
-        self.quant_coeff_der = PrivateEncodedTensor(quanted_coeff_der.values)
+        self.quant_coeff_der = quanted_coeff_der
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -769,14 +735,20 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        decrypted_filters = self.filters.reveal()
-        quanted_filters = quant_weights_MPC(decrypted_filters)
-        self.quant_filters = PrivateEncodedTensor(quanted_filters.values)
-
-        decrypted_bias = self.bias.reveal()
-        quanted_bias = quant_weights_MPC(decrypted_bias)
-        self.quant_bias = PrivateEncodedTensor(quanted_bias.values)
+        # decrypted_filters = self.filters.reveal()
+        # quanted_filters = quant_weights_MPC(decrypted_filters)
+        # self.quant_filters = quanted_filters
+        #
+        # decrypted_bias = self.bias.reveal()
+        # quanted_bias = quant_weights_MPC(decrypted_bias)
+        # self.quant_bias = quanted_bias
         # TODO: quantize over batch or over tensor within each batch?
+        quanted_filters = quant_weights_tensor(self.filters)
+        self.quant_filters = quanted_filters
+
+        quanted_bias = quant_weights_tensor(self.bias)
+        self.quant_bias = quanted_bias
+
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -1016,7 +988,62 @@ def quant_weights_MPC(weights):
     out_range = 255
     slope = in_range.inv() * out_range
     quanted_weights = ((weights - weights.min()) * slope + 0).round().convert_uint8()
-    return quanted_weights
+    return PrivateEncodedTensor(quanted_weights.values.astype(object))
+
+#
+# def quant_weights_tensor(weights):
+#     """For NativeTensors
+#     Input tensor format: NCHW
+#     N is number of filters
+#     Want to quantize each filter individually?
+#     """
+#     # Represent weights as ndarrays rather than NativeTensors
+#     unquant_weights = weights.reveal().values.astype(np.float32)
+#     # Convert to tensors for compatibility with Tensorflow
+#     unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
+#
+#     min_range = unquant_tensors.min()
+#     max_range = unquant_tensors.max()
+#     T = 'quint8'
+#
+#     quanted_weights = tf.quantization.quantize(
+#         unquant_tensors, min_range, max_range, T, mode='MIN_COMBINED',
+#         round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
+#         ensure_minimum_range=0.01)
+#
+#     return PrivateEncodedTensor(quanted_weights.astype(object))
+#
+#
+# def quant_weights_tensor2(weights):
+#     """For NativeTensors
+#     Input tensor format: NCHW
+#     N is number of filters
+#     Want to quantize each filter individually?
+#     """
+#     # Represent weights as ndarrays rather than NativeTensors
+#     unquant_weights = weights.reveal().values.astype(np.float32)
+#     # Convert to tensors for compatibility with Tensorflow
+#     unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
+#     """
+#     We want to quantize each filter in each batch separately, so we need to find
+#     the min and max for each filter
+#     """
+#     quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
+#                                weights.shape[3]))
+#     T = 'quint8'
+#     for i in range(weights.shape[0]):
+#         for j in range(weights.shape[1]):
+#             min_range = unquant_tensors[i, j, :, :].min(axis=(2, 3), keepdims=True)
+#             max_range = unquant_tensors[i, j, :, :].max(axis=(2, 3), keepdims=True)
+#
+#             quanted_weights[i, j, :, :] = tf.quantization.quantize(
+#                 unquant_tensors[i, j, :, :], min_range, max_range, T, mode='MIN_COMBINED',
+#                 round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
+#                 ensure_minimum_range=0.01)
+#
+#     quanted_array = tf.make_ndarray(quanted_weights.astype(object))
+#
+#     return PrivateEncodedTensor(quanted_array)
 
 
 def conv2d(x, y, strides, padding, precomputed=None, save_mask=True):

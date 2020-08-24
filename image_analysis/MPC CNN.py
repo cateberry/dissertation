@@ -23,12 +23,13 @@ _ = np.seterr(invalid='raise')
 """
 
 (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-x_train = x_train.astype(np.uint8)  # TODO: test this?
-x_test = x_test.astype(np.uint8)
+
 x_train = x_train[:, np.newaxis, :, :] / 255.0  # TODO: test without normalising
 x_test = x_test[:, np.newaxis, :, :] / 255.0
 # x_train = x_train[:, np.newaxis, :, :]
 # x_test = x_test[:, np.newaxis, :, :]
+# x_train = x_train.astype(np.uint8)  # TODO: test this?
+# x_test = x_test.astype(np.uint8)
 y_train = to_categorical(y_train, 10)
 y_test = to_categorical(y_test, 10)
 
@@ -63,8 +64,7 @@ convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
     ReluNormal(order=3, approx_type='regression'),  # approx_type='taylor'),
-    # Relu(order=4),
-    # ReluNormal(order=3),
+    #Relu(order=3),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
     Dense(10, 6272),  # 3136 5408 6272
@@ -112,8 +112,8 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-x_train = x_train[:64]
-y_train = y_train[:64]
+x_train = x_train[:96]
+y_train = y_train[:96]
 x_test = x_test[:32]
 y_test = y_test[:32]
 
