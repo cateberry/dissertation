@@ -49,10 +49,10 @@ class Dense(Layer):
         # quanted_bias = quant_weights_MPC(decrypted_bias)
         # self.quant_bias = quanted_bias
 
-        quanted_weights = quant_weights_ReLU(self.weights.reveal())
+        quanted_weights = quant_weights_array(self.weights)
         self.quant_weights = quanted_weights
 
-        quanted_bias = quant_weights_ReLU(self.bias.reveal())
+        quanted_bias = quant_weights_array(self.bias)
         self.quant_bias = quanted_bias
 
 
@@ -497,10 +497,10 @@ class ReluNormal(Layer):
         return input_shape
 
     def quantize(self):
-        quanted_coeffs = quant_weights_ReLU(self.coeff.reveal())
+        quanted_coeffs = quant_weights_array(self.coeff)
         self.quant_coeff = quanted_coeffs
 
-        quanted_coeff_der = quant_weights_ReLU(self.coeff_der.reveal())
+        quanted_coeff_der = quant_weights_array(self.coeff_der)
         self.quant_coeff_der = quanted_coeff_der
 
     def forward(self, x, predict=False):
@@ -701,6 +701,8 @@ class Conv2D:
             filter init: lambda function with shape parameter
             Example: Conv2D((4, 4, 1, 20), strides=2, filter_init=lambda shp: np.random.normal(scale=0.01,
             size=shp))
+
+            shape = HWCN (N=batchsize)
         """
         self.fshape = fshape
         self.strides = strides
@@ -732,12 +734,10 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        decrypted_filters = self.filters.reveal()
-        quanted_filters = quant_weights_MPC(decrypted_filters)
+        quanted_filters = quant_weights_filters(self.filters)
         self.quant_filters = quanted_filters
 
-        decrypted_bias = self.bias.reveal()
-        quanted_bias = quant_weights_ReLU(decrypted_bias)
+        quanted_bias = quant_weights_bias(self.bias)
         self.quant_bias = quanted_bias
         # TODO: quantize over batch or over tensor within each batch?
     def forward(self, x, predict=False):
@@ -964,30 +964,62 @@ class SoftmaxCrossEntropy(Loss):
 
 
 def quant_weights(weights):
-    in_range = np.max(weights) - np.min(weights)
+    maxs = np.max(weights)
+    mins = np.min(weights)
+    in_range = maxs - mins
     out_range = 255
     slope = out_range / in_range
-    quanted_weights = np.round(0 + slope * (weights - np.min(weights))).astype(np.uint8)
+    quanted_weights = np.round(0 + slope * (weights - mins)).astype(np.uint8)
 
     return quanted_weights
 
 
-def quant_weights_MPC(weights):
+def quant_weights_filters(weights):
     """For NativeTensors"""
-    in_range = weights.max(axis=(1, 2), keepdims=True) - weights.min(axis=(1, 2), keepdims=True)
+    weights = weights.unwrap().astype(np.float32)
+    mins = np.min(weights, axis=(0, 1), keepdims=True)
+    maxs = np.max(weights, axis=(0, 1), keepdims=True)
+    in_range = maxs - mins
     out_range = 255
-    slope = in_range.inv() * out_range
-    quanted_weights = ((weights - weights.min(axis=(1, 2), keepdims=True)) * slope + 0).round().convert_uint8()
-    return PrivateEncodedTensor(quanted_weights.values.astype(object))
+    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
+    slope = out_range / in_range
+    for i in range(weights.shape[2]):
+        for j in range(weights.shape[3]):
+            int1 = (weights[:, :, i, j] - mins[:, :, i, j])
+            sl1 = slope[:, :, i, j]
+            int2 = 0 + (sl1 * int1)
+            int3 = np.round(int2)
+            quanted_weights[:, :, i, j] = int3.astype(np.uint8)
+
+    #quanted_weights2 = ((weights - mins) * slope + 0).round().convert_uint8()
+    return PrivateEncodedTensor(quanted_weights.astype(object))
 
 
-def quant_weights_ReLU(weights):
+def quant_weights_bias(weights):
     """For NativeTensors"""
-    in_range = weights.max() - weights.min()
+    weights = weights.unwrap().astype(np.float32)
+    mins = np.min(weights, axis=(1, 2), keepdims=True)
+    maxs = np.max(weights, axis=(1, 2), keepdims=True)
+    in_range = maxs - mins
     out_range = 255
-    slope = in_range.inv() * out_range
-    quanted_weights = ((weights - weights.min()) * slope + 0).round().convert_uint8()
-    return PrivateEncodedTensor(quanted_weights.values.astype(object))
+    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2]))
+    slope = out_range / in_range
+    for i in range(weights.shape[0]):
+        quanted_weights[i, :, :] = np.round((0 + (slope[i, :, :] * (weights[i, :, :] - mins[i, :, :])))).astype(np.uint8)
+    return PrivateEncodedTensor(quanted_weights.astype(object))
+
+
+def quant_weights_array(weights):
+    """For NativeTensors"""
+    weights = weights.unwrap().astype(np.float32)
+    maxs = np.max(weights)
+    mins = np.min(weights)
+    in_range = maxs - mins
+    out_range = 255
+    # quanted_weights = np.zeros(weights.shape[0])
+    slope = out_range / in_range
+    quanted_weights = np.round((0 + (slope * (weights - mins)))).astype(np.uint8)
+    return PrivateEncodedTensor(quanted_weights.astype(object))
 #
 # def quant_weights_tensor(weights):
 #     """For NativeTensors
