@@ -50,16 +50,16 @@ class Dense(Layer):
 
 
     def forward(self, x, predict=False):
-        # if predict is False:
-        #     y = x.dot(self.weights) + self.bias
-        #     self.cache = x
-        #     return y
-        # else:
-        #     y = x.dot(self.quant_weights) + self.quant_bias
-        #     return y
-        y = x.dot(self.weights) + self.bias
-        self.cache = x
-        return y
+        if predict is False:
+            y = x.dot(self.weights) + self.bias
+            self.cache = x
+            return y
+        else:
+            # y = x.dot(self.quant_weights) + self.quant_bias
+            # return y
+            y = x.dot(self.weights) + self.bias
+            self.cache = x
+            return y
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -742,12 +742,12 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        quanted_filters = quant_weights_filters(self.filters)
+        quanted_filters = quant_weights_tensor2(self.filters)
         self.quant_filters = quanted_filters
 
         quanted_bias = quant_weights_bias(self.bias)
         self.quant_bias = quanted_bias
-        # TODO: quantize over batch or over tensor within each batch?
+
     def forward(self, x, predict=False):
         if predict is False:
             self.cached_input_shape = x.shape
@@ -1069,13 +1069,13 @@ def quant_weights_tensor2(weights):
     quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
                                weights.shape[3]))
     T = 'quint8'
-    for i in range(weights.shape[0]):
-        for j in range(weights.shape[1]):
-            min_range = unquant_tensors[i, j, :, :].min(axis=(2, 3), keepdims=True)
-            max_range = unquant_tensors[i, j, :, :].max(axis=(2, 3), keepdims=True)
+    for i in range(weights.shape[2]):
+        for j in range(weights.shape[3]):
+            min_range = unquant_weights[:, :, i, j].min(axis=(0, 1), keepdims=True)
+            max_range = unquant_weights[:, :, i, j].max(axis=(0, 1), keepdims=True)
 
-            quanted_weights[i, j, :, :] = tf.quantization.quantize(
-                unquant_tensors[i, j, :, :], min_range, max_range, T, mode='MIN_COMBINED',
+            quanted_weights[:, :, i, j] = tf.quantization.quantize(
+                unquant_tensors[:, :, i, j], min_range, max_range, T, mode='MIN_COMBINED',
                 round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
                 ensure_minimum_range=0.01)
 
