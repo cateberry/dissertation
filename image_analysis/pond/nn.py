@@ -41,12 +41,11 @@ class Dense(Layer):
         return output_shape
 
     def quantize(self):
-        pass
-        # quanted_weights = quant_weights_array(self.weights)
-        # self.quant_weights = quanted_weights
-        #
-        # quanted_bias = quant_weights_array(self.bias)
-        # self.quant_bias = quanted_bias
+        quanted_weights = quant_weights_array(self.weights)
+        self.quant_weights = quanted_weights
+
+        quanted_bias = quant_weights_array(self.bias)
+        self.quant_bias = quanted_bias
 
 
     def forward(self, x, predict=False):
@@ -55,11 +54,11 @@ class Dense(Layer):
             self.cache = x
             return y
         else:
-            # y = x.dot(self.quant_weights) + self.quant_bias
-            # return y
-            y = x.dot(self.weights) + self.bias
-            self.cache = x
+            y = x.dot(self.quant_weights) + self.quant_bias
             return y
+            # y = x.dot(self.weights) + self.bias
+            # self.cache = x
+            # return y
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -288,11 +287,12 @@ class Relu(Layer):
         return input_shape
 
     def quantize(self):
-        quanted_coeffs = quant_weights_MPC(self.coeff)
-        self.quant_coeff = quanted_coeffs
-
-        quanted_coeff_der = quant_weights_MPC(self.coeff_der)
-        self.quant_coeff_der = quanted_coeff_der
+        # quanted_coeffs = quant_weights_MPC(self.coeff)
+        # self.quant_coeff = quanted_coeffs
+        #
+        # quanted_coeff_der = quant_weights_MPC(self.coeff_der)
+        # self.quant_coeff_der = quanted_coeff_der
+        pass
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -308,13 +308,24 @@ class Relu(Layer):
             self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
         else:
+            # self.initializer = type(x)
+            # n_dims = len(x.shape)
+            # powers = [x, x.square()]
+            # for i in range(self.order - 2):
+            #     powers.append(x * powers[-1])
+            # forward_powers = stack(powers).flip(axis=n_dims)
+            # y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # return y
             self.initializer = type(x)
             n_dims = len(x.shape)
             powers = [x, x.square()]
             for i in range(self.order - 2):
                 powers.append(x * powers[-1])
+            # stack list into tensor
             forward_powers = stack(powers).flip(axis=n_dims)
             y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # cache all powers except the last
+            self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
 
     def backward(self, d_y, _):
@@ -493,12 +504,12 @@ class ReluNormal(Layer):
         return input_shape
 
     def quantize(self):
-        # quanted_coeffs = quant_weights_array(self.coeff)
-        # self.quant_coeff = quanted_coeffs
-        #
-        # quanted_coeff_der = quant_weights_array(self.coeff_der)
-        # self.quant_coeff_der = quanted_coeff_der
-        pass
+        quanted_coeffs = quant_weights_array(self.coeff)
+        self.quant_coeff = quanted_coeffs
+
+        quanted_coeff_der = quant_weights_array(self.coeff_der)
+        self.quant_coeff_der = quanted_coeff_der
+        # pass
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -514,25 +525,25 @@ class ReluNormal(Layer):
             self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
         else:
-            # self.initializer = type(x)
-            # n_dims = len(x.shape)
-            # powers = [x, x.square()]
-            # for i in range(self.order - 2):
-            #     powers.append(x * powers[-1])
-            # forward_powers = stack(powers).flip(axis=n_dims)
-            # y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-            # return y
             self.initializer = type(x)
             n_dims = len(x.shape)
             powers = [x, x.square()]
             for i in range(self.order - 2):
                 powers.append(x * powers[-1])
-            # stack list into tensor
             forward_powers = stack(powers).flip(axis=n_dims)
             y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-            # cache all powers except the last
-            self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
+            # self.initializer = type(x)
+            # n_dims = len(x.shape)
+            # powers = [x, x.square()]
+            # for i in range(self.order - 2):
+            #     powers.append(x * powers[-1])
+            # # stack list into tensor
+            # forward_powers = stack(powers).flip(axis=n_dims)
+            # y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # # cache all powers except the last
+            # self.cache = stack(powers[:-1]).flip(axis=n_dims)
+            # return y
 
     def backward(self, d_y, _):
         # the powers of the forward phase: x^1 ...x^order-1
@@ -742,7 +753,7 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        quanted_filters = quant_weights_tensor2(self.filters)
+        quanted_filters = quant_weights_filters(self.filters)
         self.quant_filters = quanted_filters
 
         quanted_bias = quant_weights_bias(self.bias)
@@ -976,7 +987,7 @@ def quant_weights(weights):
     mins = np.min(weights)
     in_range = maxs - mins
     out_range = 255
-    slope = out_range / in_range
+    slope = out_range / in_range  #TODO: try in_range / out_range
     quanted_weights = np.round(0 + slope * (weights - mins)).astype(np.uint8)
 
     return quanted_weights
@@ -984,20 +995,21 @@ def quant_weights(weights):
 
 def quant_weights_filters(weights):
     """For NativeTensors"""
-    weights = weights.unwrap().astype(np.float32)
+    weights = weights.unwrap()#.astype(np.float32)  # TODO: operate on object
     mins = np.min(weights, axis=(0, 1), keepdims=True)
     maxs = np.max(weights, axis=(0, 1), keepdims=True)
     in_range = maxs - mins
     out_range = 255
     quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
-    slope = out_range / in_range
+    # slope = out_range / in_range
+    slope = in_range / out_range
     for i in range(weights.shape[2]):
         for j in range(weights.shape[3]):
             int1 = (weights[:, :, i, j] - mins[:, :, i, j])
             sl1 = slope[:, :, i, j]
             int2 = 0 + (sl1 * int1)
             int3 = np.round(int2)
-            quanted_weights[:, :, i, j] = int3.astype(np.uint8)
+            quanted_weights[:, :, i, j] = int3#.astype(np.uint8)
 
     #quanted_weights2 = ((weights - mins) * slope + 0).round().convert_uint8()
     return PrivateEncodedTensor(quanted_weights.astype(object))
@@ -1005,28 +1017,30 @@ def quant_weights_filters(weights):
 
 def quant_weights_bias(weights):
     """For NativeTensors"""
-    weights = weights.unwrap().astype(np.float32)
+    weights = weights.unwrap()# .astype(np.float32)
     mins = np.min(weights, axis=(1, 2), keepdims=True)
     maxs = np.max(weights, axis=(1, 2), keepdims=True)
     in_range = maxs - mins
     out_range = 255
     quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2]))
-    slope = out_range / in_range
+    # slope = out_range / in_range
+    slope = in_range / out_range
     for i in range(weights.shape[0]):
-        quanted_weights[i, :, :] = np.round((0 + (slope[i, :, :] * (weights[i, :, :] - mins[i, :, :])))).astype(np.uint8)
+        quanted_weights[i, :, :] = np.round((0 + (slope[i, :, :] * (weights[i, :, :] - mins[i, :, :]))))#.astype(np.uint8)
     return PrivateEncodedTensor(quanted_weights.astype(object))
 
 
 def quant_weights_array(weights):
     """For NativeTensors"""
-    weights = weights.unwrap().astype(np.float32)
+    weights = weights.unwrap()#.astype(np.float32)
     maxs = np.max(weights)
     mins = np.min(weights)
     in_range = maxs - mins
     out_range = 255
     # quanted_weights = np.zeros(weights.shape[0])
-    slope = out_range / in_range
-    quanted_weights = np.round((0 + (slope * (weights - mins)))).astype(np.uint8)
+    # slope = out_range / in_range
+    slope = in_range / out_range
+    quanted_weights = np.round((0 + (slope * (weights - mins))))#.astype(np.uint8)
     return PrivateEncodedTensor(quanted_weights.astype(object))
 #
 # def quant_weights_tensor(weights):

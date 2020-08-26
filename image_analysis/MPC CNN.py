@@ -112,10 +112,10 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-x_train = x_train[:64]
-y_train = y_train[:64]
-x_test = x_test[:32]
-y_test = y_test[:32]
+x_train = x_train[:128]
+y_train = y_train[:128]
+x_test = x_test[:64]
+y_test = y_test[:64]
 
 tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
 batch_size = 32
