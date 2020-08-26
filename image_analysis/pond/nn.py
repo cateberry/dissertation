@@ -12,7 +12,7 @@ from scipy.interpolate import approximate_taylor_polynomial
 import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
-#import tensorflow as tf
+import tensorflow as tf
 
 
 class Layer:
@@ -41,29 +41,25 @@ class Dense(Layer):
         return output_shape
 
     def quantize(self):
-        # decrypted_weights = self.weights.reveal()
-        # quanted_weights = quant_weights_MPC(decrypted_weights)
+        pass
+        # quanted_weights = quant_weights_array(self.weights)
         # self.quant_weights = quanted_weights
         #
-        # decrypted_bias = self.bias.reveal()
-        # quanted_bias = quant_weights_MPC(decrypted_bias)
+        # quanted_bias = quant_weights_array(self.bias)
         # self.quant_bias = quanted_bias
-
-        quanted_weights = quant_weights_array(self.weights)
-        self.quant_weights = quanted_weights
-
-        quanted_bias = quant_weights_array(self.bias)
-        self.quant_bias = quanted_bias
 
 
     def forward(self, x, predict=False):
-        if predict is False:
-            y = x.dot(self.weights) + self.bias
-            self.cache = x
-            return y
-        else:
-            y = x.dot(self.quant_weights) + self.quant_bias
-            return y
+        # if predict is False:
+        #     y = x.dot(self.weights) + self.bias
+        #     self.cache = x
+        #     return y
+        # else:
+        #     y = x.dot(self.quant_weights) + self.quant_bias
+        #     return y
+        y = x.dot(self.weights) + self.bias
+        self.cache = x
+        return y
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -497,11 +493,12 @@ class ReluNormal(Layer):
         return input_shape
 
     def quantize(self):
-        quanted_coeffs = quant_weights_array(self.coeff)
-        self.quant_coeff = quanted_coeffs
-
-        quanted_coeff_der = quant_weights_array(self.coeff_der)
-        self.quant_coeff_der = quanted_coeff_der
+        # quanted_coeffs = quant_weights_array(self.coeff)
+        # self.quant_coeff = quanted_coeffs
+        #
+        # quanted_coeff_der = quant_weights_array(self.coeff_der)
+        # self.quant_coeff_der = quanted_coeff_der
+        pass
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -517,13 +514,24 @@ class ReluNormal(Layer):
             self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
         else:
+            # self.initializer = type(x)
+            # n_dims = len(x.shape)
+            # powers = [x, x.square()]
+            # for i in range(self.order - 2):
+            #     powers.append(x * powers[-1])
+            # forward_powers = stack(powers).flip(axis=n_dims)
+            # y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # return y
             self.initializer = type(x)
             n_dims = len(x.shape)
             powers = [x, x.square()]
             for i in range(self.order - 2):
                 powers.append(x * powers[-1])
+            # stack list into tensor
             forward_powers = stack(powers).flip(axis=n_dims)
             y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # cache all powers except the last
+            self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
 
     def backward(self, d_y, _):
@@ -1044,36 +1052,36 @@ def quant_weights_array(weights):
 #     return PrivateEncodedTensor(quanted_weights.astype(object))
 #
 #
-# def quant_weights_tensor2(weights):
-#     """For NativeTensors
-#     Input tensor format: NCHW
-#     N is number of filters
-#     Want to quantize each filter individually?
-#     """
-#     # Represent weights as ndarrays rather than NativeTensors
-#     unquant_weights = weights.reveal().values.astype(np.float32)
-#     # Convert to tensors for compatibility with Tensorflow
-#     unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
-#     """
-#     We want to quantize each filter in each batch separately, so we need to find
-#     the min and max for each filter
-#     """
-#     quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
-#                                weights.shape[3]))
-#     T = 'quint8'
-#     for i in range(weights.shape[0]):
-#         for j in range(weights.shape[1]):
-#             min_range = unquant_tensors[i, j, :, :].min(axis=(2, 3), keepdims=True)
-#             max_range = unquant_tensors[i, j, :, :].max(axis=(2, 3), keepdims=True)
-#
-#             quanted_weights[i, j, :, :] = tf.quantization.quantize(
-#                 unquant_tensors[i, j, :, :], min_range, max_range, T, mode='MIN_COMBINED',
-#                 round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
-#                 ensure_minimum_range=0.01)
-#
-#     quanted_array = tf.make_ndarray(quanted_weights.astype(object))
-#
-#     return PrivateEncodedTensor(quanted_array)
+def quant_weights_tensor2(weights):
+    """For NativeTensors
+    Input tensor format: NCHW
+    N is number of filters
+    Want to quantize each filter individually?
+    """
+    # Represent weights as ndarrays rather than NativeTensors
+    unquant_weights = weights.unwrap().astype(np.float32)
+    # Convert to tensors for compatibility with Tensorflow
+    unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
+    """
+    We want to quantize each filter in each batch separately, so we need to find
+    the min and max for each filter
+    """
+    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
+                               weights.shape[3]))
+    T = 'quint8'
+    for i in range(weights.shape[0]):
+        for j in range(weights.shape[1]):
+            min_range = unquant_tensors[i, j, :, :].min(axis=(2, 3), keepdims=True)
+            max_range = unquant_tensors[i, j, :, :].max(axis=(2, 3), keepdims=True)
+
+            quanted_weights[i, j, :, :] = tf.quantization.quantize(
+                unquant_tensors[i, j, :, :], min_range, max_range, T, mode='MIN_COMBINED',
+                round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
+                ensure_minimum_range=0.01)
+
+    quanted_array = tf.make_ndarray(quanted_weights.astype(object))
+
+    return PrivateEncodedTensor(quanted_array)
 
 
 def conv2d(x, y, strides, padding, precomputed=None, save_mask=True):
