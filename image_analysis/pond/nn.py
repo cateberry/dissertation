@@ -8,12 +8,14 @@ from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor,
 import math
 import time
 import pond
+import chebyshev
 from scipy.interpolate import approximate_taylor_polynomial
 import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
 import tensorflow as tf
 import torch
+import math
 
 
 class Layer:
@@ -487,6 +489,50 @@ def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     return coeffs
 
 
+from chebyshev.approximation import Approximation
+def approximate_chebyshev(order, interval):
+    # x = sym.Symbol('x')
+    f = sym.Max(x, 0)
+    polynomial_degree = order
+    taylor_degree = 20
+    point = 0
+    approx = Approximation(f, interval, polynomial_degree, taylor_degree, point)
+    coeffs = approx.coeffs
+
+    return coeffs
+
+
+# class Chebyshev:
+#     """
+#     Chebyshev(a, b, n, func)
+#     Given a function func, lower and upper limits of the interval [a,b],
+#     and maximum degree n, this class computes a Chebyshev approximation
+#     of the function.
+#     Method eval(x) yields the approximated function value.
+#     """
+#     def __init__(self, a, b, n, func):
+#         self.a = a
+#         self.b = b
+#         self.func = func
+#
+#         bma = 0.5 * (b - a)
+#         bpa = 0.5 * (b + a)
+#         f = [func(math.cos(math.pi * (k + 0.5) / n) * bma + bpa) for k in range(n)]
+#         fac = 2.0 / n
+#         self.c = [fac * sum([f[k] * math.cos(math.pi * j * (k + 0.5) / n)
+#                   for k in range(n)]) for j in range(n)]
+#
+#     def eval(self, x):
+#         a,b = self.a, self.b
+#         assert(a <= x <= b)
+#         y = (2.0 * x - a - b) * (1.0 / (b - a))
+#         y2 = 2.0 * y
+#         (d, dd) = (self.c[-1], 0)             # Special case first step for efficiency
+#         for cj in self.c[-2:0:-1]:            # Clenshaw's recurrence
+#             (d, dd) = (y2 * d - dd + cj, d)
+#         return y * d - dd + 0.5 * self.c[0]   # Last step is different
+
+
 class ReluNormal(Layer):
 
     def __init__(self, order, mu=0.0, sigma=1.0, n=1000, approx_type='regression'):
@@ -583,6 +629,9 @@ class ReluNormal(Layer):
         elif approx_type == 'lagrange-chebyshev':  # TODO: experiment with number of points
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             coeffs = approximate_lagrange(order, point_dist='chebyshev', method='leastsquares')
+        elif approx_type == 'chebyshev':
+            interval = (-1, 1)
+            coeffs = approximate_chebyshev(order, interval)
         else:
             pass
 
@@ -1072,6 +1121,7 @@ def quant_weights_array(weights):
 #
 #
 def quant_weights_tensor2(weights):
+    from torch.quantization import QConfig, MinMaxObserver, default_observer
     """For NativeTensors
     Input tensor format: NCHW
     N is number of filters
@@ -1086,7 +1136,12 @@ def quant_weights_tensor2(weights):
     the min and max for each filter
     """
 
-    quant_tensors = torch.quantize_per_tensor(unquant_tensors, scale=0.1, zero_point=0, dtype=torch.quint8)
+    quant_scheme = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, reduce_range=False)
+    calc = quant_scheme.forward(unquant_tensors)
+    params = quant_scheme.calculate_qparams()
+    print(params)
+
+    quant_tensors = torch.quantize_per_tensor(unquant_tensors, scale=params[0].numpy()[0], zero_point=params[1].numpy()[0].astype(int), dtype=torch.quint8)
 
     # quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
     #                            weights.shape[3]))
