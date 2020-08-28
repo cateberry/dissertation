@@ -13,6 +13,7 @@ import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
 import tensorflow as tf
+import torch
 
 
 class Layer:
@@ -41,11 +42,12 @@ class Dense(Layer):
         return output_shape
 
     def quantize(self):
-        quanted_weights = quant_weights_array(self.weights)
-        self.quant_weights = quanted_weights
-
-        quanted_bias = quant_weights_array(self.bias)
-        self.quant_bias = quanted_bias
+        # quanted_weights = quant_weights_array(self.weights)
+        # self.quant_weights = quanted_weights
+        #
+        # quanted_bias = quant_weights_array(self.bias)
+        # self.quant_bias = quanted_bias
+        pass
 
 
     def forward(self, x, predict=False):
@@ -54,11 +56,11 @@ class Dense(Layer):
             self.cache = x
             return y
         else:
-            y = x.dot(self.quant_weights) + self.quant_bias
-            return y
-            # y = x.dot(self.weights) + self.bias
-            # self.cache = x
+            # y = x.dot(self.quant_weights) + self.quant_bias
             # return y
+            y = x.dot(self.weights) + self.bias
+            self.cache = x
+            return y
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -504,12 +506,12 @@ class ReluNormal(Layer):
         return input_shape
 
     def quantize(self):
-        quanted_coeffs = quant_weights_array(self.coeff)
-        self.quant_coeff = quanted_coeffs
-
-        quanted_coeff_der = quant_weights_array(self.coeff_der)
-        self.quant_coeff_der = quanted_coeff_der
-        # pass
+        # quanted_coeffs = quant_weights_array(self.coeff)
+        # self.quant_coeff = quanted_coeffs
+        #
+        # quanted_coeff_der = quant_weights_array(self.coeff_der)
+        # self.quant_coeff_der = quanted_coeff_der
+        pass
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -525,25 +527,25 @@ class ReluNormal(Layer):
             self.cache = stack(powers[:-1]).flip(axis=n_dims)
             return y
         else:
-            self.initializer = type(x)
-            n_dims = len(x.shape)
-            powers = [x, x.square()]
-            for i in range(self.order - 2):
-                powers.append(x * powers[-1])
-            forward_powers = stack(powers).flip(axis=n_dims)
-            y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-            return y
             # self.initializer = type(x)
             # n_dims = len(x.shape)
             # powers = [x, x.square()]
             # for i in range(self.order - 2):
             #     powers.append(x * powers[-1])
-            # # stack list into tensor
             # forward_powers = stack(powers).flip(axis=n_dims)
             # y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-            # # cache all powers except the last
-            # self.cache = stack(powers[:-1]).flip(axis=n_dims)
             # return y
+            self.initializer = type(x)
+            n_dims = len(x.shape)
+            powers = [x, x.square()]
+            for i in range(self.order - 2):
+                powers.append(x * powers[-1])
+            # stack list into tensor
+            forward_powers = stack(powers).flip(axis=n_dims)
+            y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
+            # cache all powers except the last
+            self.cache = stack(powers[:-1]).flip(axis=n_dims)
+            return y
 
     def backward(self, d_y, _):
         # the powers of the forward phase: x^1 ...x^order-1
@@ -575,9 +577,12 @@ class ReluNormal(Layer):
             coeffs = approximate_lagrange(order, point_dist='uniform', method='interpolation')
         elif approx_type == 'lagrange-uniform-leastsquares':
             coeffs = approximate_lagrange(order, point_dist='uniform', method='leastsquares')
+        elif approx_type == 'lagrange-chebyshev':  # TODO: test chebyshev
+            # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
+            coeffs = approximate_lagrange(order, point_dist='chebyshev', method='interpolation')
         elif approx_type == 'lagrange-chebyshev':  # TODO: experiment with number of points
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
-            coeffs = approximate_lagrange(order, 'chebyshev')
+            coeffs = approximate_lagrange(order, point_dist='chebyshev', method='leastsquares')
         else:
             pass
 
@@ -753,11 +758,11 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        quanted_filters = quant_weights_filters(self.filters)
+        quanted_filters = quant_weights_tensor2(self.filters)
         self.quant_filters = quanted_filters
 
-        quanted_bias = quant_weights_bias(self.bias)
-        self.quant_bias = quanted_bias
+        # quanted_bias = quant_weights_bias(self.bias)
+        # self.quant_bias = quanted_bias
 
     def forward(self, x, predict=False):
         if predict is False:
@@ -769,7 +774,7 @@ class Conv2D:
         else:
             out, X_col = conv2d(x, self.quant_filters, self.strides, self.padding)
 
-            return out + self.quant_bias
+            return out + self.bias
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -976,7 +981,7 @@ class CrossEntropy(Loss):
     @staticmethod
     def derive(_, y_correct):
         return y_correct
-
+# TODO: test different loss function that doesn't use exp or log?
 
 class SoftmaxCrossEntropy(Loss):
     pass
@@ -1075,25 +1080,28 @@ def quant_weights_tensor2(weights):
     # Represent weights as ndarrays rather than NativeTensors
     unquant_weights = weights.unwrap().astype(np.float32)
     # Convert to tensors for compatibility with Tensorflow
-    unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
+    unquant_tensors = torch.from_numpy(unquant_weights)
     """
     We want to quantize each filter in each batch separately, so we need to find
     the min and max for each filter
     """
-    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
-                               weights.shape[3]))
-    T = 'quint8'
-    for i in range(weights.shape[2]):
-        for j in range(weights.shape[3]):
-            min_range = unquant_weights[:, :, i, j].min(axis=(0, 1), keepdims=True)
-            max_range = unquant_weights[:, :, i, j].max(axis=(0, 1), keepdims=True)
 
-            quanted_weights[:, :, i, j] = tf.quantization.quantize(
-                unquant_tensors[:, :, i, j], min_range, max_range, T, mode='MIN_COMBINED',
-                round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
-                ensure_minimum_range=0.01)
+    quant_tensors = torch.quantize_per_tensor(unquant_tensors, scale=0.1, zero_point=0, dtype=torch.quint8)
 
-    quanted_array = tf.make_ndarray(quanted_weights.astype(object))
+    # quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
+    #                            weights.shape[3]))
+    # T = 'quint8'
+    # for i in range(weights.shape[2]):
+    #     for j in range(weights.shape[3]):
+    #         min_range = unquant_weights[:, :, i, j].min(axis=(0, 1), keepdims=True)
+    #         max_range = unquant_weights[:, :, i, j].max(axis=(0, 1), keepdims=True)
+    #
+    #         quanted_weights[:, :, i, j] = tf.quantization.quantize(
+    #             unquant_tensors[:, :, i, j], min_range, max_range, T, mode='MIN_COMBINED',
+    #             round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
+    #             ensure_minimum_range=0.01)
+
+    quanted_array = quant_tensors.int_repr().numpy()#.astype(object)
 
     return PrivateEncodedTensor(quanted_array)
 
@@ -1423,6 +1431,7 @@ class Sequential(Model):
     def predict(self, x, batch_size=32, verbose=0):
         self.quantize()
         predict = True
+        # predict = False
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
         for batch_index, x_batch in enumerate(x.batches(batch_size)):

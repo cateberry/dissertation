@@ -252,8 +252,8 @@ MAX_SUM = 2 ** 12
 assert MAX_DEGREE * log2(Q) + log2(MAX_SUM) < 256
 
 BASE = 2
-PRECISION_INTEGRAL = 4  # 5
-PRECISION_FRACTIONAL = 12  # 13
+PRECISION_INTEGRAL = 5  # 5
+PRECISION_FRACTIONAL = 13  # 13
 
 # We need room for double precision before truncating.
 # assert PRECISION_INTEGRAL + 2 * PRECISION_FRACTIONAL < log(Q) / log(BASE)
