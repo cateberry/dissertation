@@ -2,7 +2,7 @@ import keras
 import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
-from pond.nn import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
+from pond.nn2 import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
     AveragePooling2D, Flatten, BatchNorm, ReluNormal, Softmax
 from keras.utils import to_categorical
 
