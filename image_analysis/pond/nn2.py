@@ -489,48 +489,64 @@ def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     return coeffs
 
 
-from chebyshev.approximation import Approximation
+# from chebyshev.approximation import Approximation
 def approximate_chebyshev(order, interval):
-    # x = sym.Symbol('x')
-    f = sym.Max(x, 0)
-    polynomial_degree = order
-    taylor_degree = 20
-    point = 0
-    approx = Approximation(f, interval, polynomial_degree, taylor_degree, point)
-    coeffs = approx.coeffs
+    #     f = sym.Max(x, 0)
+    #     polynomial_degree = order
+    #     taylor_degree = 20
+    #     point = 0
+    #     approx = Approximation(f, interval, polynomial_degree, taylor_degree, point)
+    #     coeffs = approx.coeffs
+    x = sym.Symbol('x')
+    f2 = lambda y: (y > 0) * y
+    n_points = order
+    approx = Chebyshev(interval[0], interval[1], order, f2)
+    u = approx.eval(x)
+    print(u)
+
+    coeff_list = []
+    orders = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
+    i = 0
+    expression = u.expand()
+    while i < len(orders):
+        coeff_list.append(expression.as_coefficients_dict()[orders[i]])
+        i += 1
+
+    coeffs = np.array(coeff_list[:n_points + 1])
+    comparison_plot(f2, u, interval)
 
     return coeffs
 
 
-# class Chebyshev:
-#     """
-#     Chebyshev(a, b, n, func)
-#     Given a function func, lower and upper limits of the interval [a,b],
-#     and maximum degree n, this class computes a Chebyshev approximation
-#     of the function.
-#     Method eval(x) yields the approximated function value.
-#     """
-#     def __init__(self, a, b, n, func):
-#         self.a = a
-#         self.b = b
-#         self.func = func
-#
-#         bma = 0.5 * (b - a)
-#         bpa = 0.5 * (b + a)
-#         f = [func(math.cos(math.pi * (k + 0.5) / n) * bma + bpa) for k in range(n)]
-#         fac = 2.0 / n
-#         self.c = [fac * sum([f[k] * math.cos(math.pi * j * (k + 0.5) / n)
-#                   for k in range(n)]) for j in range(n)]
-#
-#     def eval(self, x):
-#         a,b = self.a, self.b
-#         assert(a <= x <= b)
-#         y = (2.0 * x - a - b) * (1.0 / (b - a))
-#         y2 = 2.0 * y
-#         (d, dd) = (self.c[-1], 0)             # Special case first step for efficiency
-#         for cj in self.c[-2:0:-1]:            # Clenshaw's recurrence
-#             (d, dd) = (y2 * d - dd + cj, d)
-#         return y * d - dd + 0.5 * self.c[0]   # Last step is different
+class Chebyshev:
+    """
+    Chebyshev(a, b, n, func)
+    Given a function func, lower and upper limits of the interval [a,b],
+    and maximum degree n, this class computes a Chebyshev approximation
+    of the function.
+    Method eval(x) yields the approximated function value.
+    """
+    def __init__(self, a, b, n, func):
+        self.a = a
+        self.b = b
+        self.func = func
+
+        bma = 0.5 * (b - a)
+        bpa = 0.5 * (b + a)
+        f = [func(math.cos(math.pi * (k + 0.5) / n) * bma + bpa) for k in range(n)]
+        fac = 2.0 / n
+        self.c = [fac * sum([f[k] * math.cos(math.pi * j * (k + 0.5) / n)
+                  for k in range(n)]) for j in range(n)]
+
+    def eval(self, x):
+        a,b = self.a, self.b
+        # assert(a <= x <= b)
+        y = (2.0 * x - a - b) * (1.0 / (b - a))
+        y2 = 2.0 * y
+        (d, dd) = (self.c[-1], 0)             # Special case first step for efficiency
+        for cj in self.c[-2:0:-1]:            # Clenshaw's recurrence
+            (d, dd) = (y2 * d - dd + cj, d)
+        return y * d - dd + 0.5 * self.c[0]   # Last step is different
 
 
 class ReluNormal(Layer):
@@ -618,19 +634,19 @@ class ReluNormal(Layer):
             # Fit a Taylor polynomial
             taylor_approx = approximate_taylor_polynomial(self.relu, 0, order, 3)  # TODO: experiment with scale
             coeffs = taylor_approx.coeffs
-        elif approx_type == 'lagrange-uniform-interpolate':  # TODO: experiment with parameters
+        elif approx_type == 'lagrange-uniform-interp':  # TODO: experiment with parameters
             # Fit a Lagrange polynomial with equidistant points over interval
             coeffs = approximate_lagrange(order, point_dist='uniform', method='interpolation')
-        elif approx_type == 'lagrange-uniform-leastsquares':
+        elif approx_type == 'lagrange-uniform-ls':
             coeffs = approximate_lagrange(order, point_dist='uniform', method='leastsquares')
-        elif approx_type == 'lagrange-chebyshev':  # TODO: test chebyshev
+        elif approx_type == 'lagrange-chebyshev-interp':  # TODO: test chebyshev
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             coeffs = approximate_lagrange(order, point_dist='chebyshev', method='interpolation')
-        elif approx_type == 'lagrange-chebyshev':  # TODO: experiment with number of points
+        elif approx_type == 'lagrange-chebyshev-ls':  # TODO: experiment with number of points
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             coeffs = approximate_lagrange(order, point_dist='chebyshev', method='leastsquares')
         elif approx_type == 'chebyshev':
-            interval = (-1, 1)
+            interval = (-3, 3)
             coeffs = approximate_chebyshev(order, interval)
         else:
             pass
@@ -807,7 +823,7 @@ class Conv2D:
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        quanted_filters = quant_weights_filters2(self.filters)
+        quanted_filters = quant_weights_tensor2(self.filters)
         self.quant_filters = quanted_filters
 
         # quanted_bias = quant_weights_bias(self.bias)
