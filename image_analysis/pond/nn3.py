@@ -17,6 +17,8 @@ import tensorflow as tf
 import torch
 import math
 from collections import namedtuple
+import torch.nn.functional as F
+import torch.nn as nn
 
 
 class Layer:
@@ -36,6 +38,9 @@ class Dense(Layer):
         self.cache = None
         self.quant_weights = None
         self.quant_bias = None
+        self.fc = True
+        self.collect_stats = True
+        self.name = 'fc'
 
     def initialize(self, input_shape, initializer=None, **_):
         if initializer is not None:
@@ -54,6 +59,7 @@ class Dense(Layer):
 
     def forward(self, x, predict=False):
         if predict is False:
+            x = x.reshape(x.shape[0], -1)
             y = x.dot(self.weights) + self.bias
             self.cache = x
             return y
@@ -88,6 +94,8 @@ class BatchNorm(Layer):
         self.moving_mean = None
         self.moving_var = None
         self.initializer = None
+        self.collect_stats = False
+        self.name = 'bn'
 
     def initialize(self, input_shape, initializer=None, **_):
         if initializer is not None:
@@ -204,6 +212,8 @@ class SoftmaxStable(Layer):
 
     def __init__(self):
         self.cache = None
+        self.collect_stats = False
+        self.name = 'softmax'
         pass
 
     def initialize(self, input_shape, **_):
@@ -284,6 +294,8 @@ class Relu(Layer):
         self.coeff = NativeTensor(self.compute_coefficients_relu(order, domain, n))
         self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
         self.initializer = None
+        self.collect_stats = False
+        self.name = 'relu'
         assert order > 2
 
     @staticmethod
@@ -750,6 +762,8 @@ class Dropout(Layer):
 class Flatten(Layer):
     def __init__(self):
         self.shape = None
+        self.collect_stats = False
+        self.name = 'flatten'
 
     @staticmethod
     def initialize(input_shape, **_):
@@ -788,13 +802,16 @@ class Conv2D:
         self.cached_x_col = None
         self.cached_input_shape = None
         self.initializer = None
-        self.filters = None
+        self.weights = None
         self.bias = None
         self.model = None
         self.quant_filters = None
         self.quant_bias = None
         self.scales = None
         self.zero_points = None
+        self.conv = True
+        self.collect_stats = True
+        self.name = 'conv1'
         assert channels_first
 
     def initialize(self, input_shape, model=None, initializer=None):
@@ -806,12 +823,12 @@ class Conv2D:
         w_out = int((w_x - w_filter + 2 * self.padding) / self.strides + 1)
 
         self.bias = initializer(np.zeros((n_filters, h_out, w_out)))
-        self.filters = initializer(self.filter_init(self.fshape))
+        self.weights = initializer(self.filter_init(self.fshape))
 
         return [n_x, n_filters, h_out, w_out]
 
     def quantize(self):
-        quanted_filters, scales, zero_points = quant_weights_filters2(self.filters)
+        quanted_filters, scales, zero_points = quant_weights_filters2(self.weights)
         self.quant_filters = PrivateEncodedTensor(quanted_filters.astype(object))
         self.scales = scales
         self.zero_points = zero_points
@@ -819,17 +836,17 @@ class Conv2D:
         # quanted_bias = quant_weights_bias(self.bias)
         # self.quant_bias = quanted_bias
 
-    def dequantize(self, out):
-        """out is PrivateEncodedTensor, scales and zero_points are float/int"""
-        dequanted_out = dequant_weights_filters2(out, self.scales, self.zero_points)
-
-        return dequanted_out
+    # def dequantize(self, out):
+    #     """out is PrivateEncodedTensor, scales and zero_points are float/int"""
+    #     dequanted_out = dequant_weights_filters2(out, self.scales, self.zero_points)
+    #
+    #     return dequanted_out
 
     def forward(self, x, predict=False):
         if predict is False:
             self.cached_input_shape = x.shape
             self.cache = x
-            out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
+            out, self.cached_x_col = conv2d(x, self.weights, self.strides, self.padding)
 
             return out + self.bias
         else:
@@ -842,22 +859,22 @@ class Conv2D:
 
     def backward(self, d_y, learning_rate):
         x = self.cache
-        h_filter, w_filter, d_filter, n_filter = self.filters.shape
+        h_filter, w_filter, d_filter, n_filter = self.weights.shape
         dx = None
 
         if self.model.layers.index(self) != 0:
-            W_reshaped = self.filters.reshape(n_filter, -1).transpose()
+            W_reshaped = self.weights.reshape(n_filter, -1).transpose()
             dout_reshaped = d_y.transpose(1, 2, 3, 0).reshape(n_filter, -1)
             dx = W_reshaped.dot(dout_reshaped).col2im(imshape=self.cached_input_shape, field_height=h_filter,
                                                       field_width=w_filter, padding=self.padding, stride=self.strides)
 
-        d_w = conv2d_bw(x, d_y, self.cached_x_col, self.filters.shape, padding=self.padding, strides=self.strides)
+        d_w = conv2d_bw(x, d_y, self.cached_x_col, self.weights.shape, padding=self.padding, strides=self.strides)
         d_bias = d_y.sum(axis=0)
 
         if self.l2reg_lambda > 0:
-            d_w = d_w + self.filters * (self.l2reg_lambda / self.cached_input_shape[0])
+            d_w = d_w + self.weights * (self.l2reg_lambda / self.cached_input_shape[0])
 
-        self.filters = (d_w * learning_rate).neg() + self.filters
+        self.weights = (d_w * learning_rate).neg() + self.weights
         self.bias = (d_bias * learning_rate).neg() + self.bias
 
         return dx
@@ -875,6 +892,8 @@ class AveragePooling2D:
         self.pool_area = pool_size[0] * pool_size[1]
         self.cache = None
         self.initializer = None
+        self.collect_stats = False
+        self.name = 'avgpool'
         if strides is None:
             self.strides = pool_size[0]
         else:
@@ -1004,6 +1023,8 @@ class ConvAveragePooling2D:
 class Reveal(Layer):
 
     def __init__(self):
+        self.collect_stats = False
+        self.name = 'reveal'
         pass
 
     @staticmethod
@@ -1047,198 +1068,127 @@ class CrossEntropy(Loss):
         return y_correct
 
 
-# TODO: test different loss function that doesn't use exp or log?
-
 class SoftmaxCrossEntropy(Loss):
     pass
-
-
-def quant_weights(weights):
-    maxs = np.max(weights)
-    mins = np.min(weights)
-    in_range = maxs - mins
-    out_range = 255
-    slope = out_range / in_range  # TODO: try in_range / out_range
-    quanted_weights = np.round(0 + slope * (weights - mins)).astype(np.uint8)
-
-    return quanted_weights
-
-
-def quant_weights_filters(weights):
-    """NCHW"""
-    weights = weights.unwrap()  # .astype(np.float32)  # TODO: operate on object
-    mins = np.min(weights, axis=(0, 1), keepdims=True)
-    maxs = np.max(weights, axis=(0, 1), keepdims=True)
-    in_range = maxs - mins
-    out_range = 255
-    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
-    # slope = out_range / in_range
-    slope = in_range / out_range
-    for i in range(weights.shape[0]):
-        for j in range(weights.shape[1]):
-            int1 = (weights[i, j, :, :] - mins[i, j, :, :])
-            sl1 = slope[i, j, :, :]
-            int2 = 0 + (sl1 * int1)
-            int3 = np.round(int2)
-            quanted_weights[i, j, :, :] = int3  # .astype(np.uint8)
-
-    # quanted_weights2 = ((weights - mins) * slope + 0).round().convert_uint8()
-    return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-def quant_weights_bias(weights):
-    """For NativeTensors"""
-    weights = weights.unwrap()  # .astype(np.float32)
-    mins = np.min(weights, axis=(1, 2), keepdims=True)
-    maxs = np.max(weights, axis=(1, 2), keepdims=True)
-    in_range = maxs - mins
-    out_range = 255
-    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2]))
-    # slope = out_range / in_range
-    slope = in_range / out_range
-    for i in range(weights.shape[0]):
-        quanted_weights[i, :, :] = np.round(
-            (0 + (slope[i, :, :] * (weights[i, :, :] - mins[i, :, :]))))  # .astype(np.uint8)
-    return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-def quant_weights_array(weights):
-    """For NativeTensors"""
-    weights = weights.unwrap()  # .astype(np.float32)
-    maxs = np.max(weights)
-    mins = np.min(weights)
-    in_range = maxs - mins
-    out_range = 255
-    # quanted_weights = np.zeros(weights.shape[0])
-    # slope = out_range / in_range
-    slope = in_range / out_range
-    quanted_weights = np.round((0 + (slope * (weights - mins))))  # .astype(np.uint8)
-    return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-#
-# def quant_weights_tensor(weights):
-#     """For NativeTensors
-#     Input tensor format: NCHW
-#     N is number of filters
-#     Want to quantize each filter individually?
-#     """
-#     # Represent weights as ndarrays rather than NativeTensors
-#     unquant_weights = weights.reveal().values.astype(np.float32)
-#     # Convert to tensors for compatibility with Tensorflow
-#     unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
-#
-#     min_range = unquant_tensors.min()
-#     max_range = unquant_tensors.max()
-#     T = 'quint8'
-#
-#     quanted_weights = tf.quantization.quantize(
-#         unquant_tensors, min_range, max_range, T, mode='MIN_COMBINED',
-#         round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
-#         ensure_minimum_range=0.01)
-#
-#     return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-def quant_weights_tensor2(weights):
-    from torch.quantization import PerChannelMinMaxObserver, MinMaxObserver
-    """For NativeTensors
-    Input tensor format: NCHW
-    N is number of filters
-    Want to quantize each filter individually?
-    """
-    # Represent weights as ndarrays rather than NativeTensors
-    unquant_weights = weights.unwrap().astype(np.float32)  # need to convert to float
-    # Convert to tensors for compatibility with Tensorflow
-    unquant_tensors = torch.from_numpy(unquant_weights)
-    """
-    We want to quantize each filter in each batch separately, so we need to find
-    the min and max for each filter
-    """
-
-    quant_scheme = PerChannelMinMaxObserver(dtype=torch.quint8, qscheme=torch.per_channel_symmetric, reduce_range=False)
-    calc = quant_scheme.forward(unquant_tensors)
-    params = quant_scheme.calculate_qparams()
-    # print(params)
-        # TODO: test change to per channel
-    quant_tensors = torch.quantize_per_channel(unquant_tensors, scales=params[0],
-                                              zero_points=params[1], axis=1, dtype=torch.quint8)
-
-    quanted_array = quant_tensors.int_repr().numpy()  # .astype(object)  # TODO: test this uncommented
-
-    return PrivateEncodedTensor(quanted_array)
 
 
 QTensor = namedtuple('QTensor', ['tensor', 'scale', 'zero_point'])
 
 
-def quantize_tensor(x, num_bits=8):
+def calcScaleZeroPoint(min_val, max_val, num_bits=8):
+    # Calc Scale and zero point of next
     qmin = 0.
     qmax = 2. ** num_bits - 1.
-    unquant_weights = x.unwrap().astype(np.float32)  # need to convert to float
-    # Convert to tensors for compatibility with Tensorflow
-    unquant_tensors = torch.from_numpy(unquant_weights)
-    min_val = unquant_weights.min()  # , axis=(0, 1), keepdims=True)  # input is already sliced
-    max_val = unquant_weights.max()  # , axis=(0, 1), keepdims=True)
 
     scale = (max_val - min_val) / (qmax - qmin)
+
     initial_zero_point = qmin - min_val / scale
 
-    # zero_point = 0
-    # if initial_zero_point < qmin:
-    #     zero_point = qmin
-    # elif initial_zero_point > qmax:
-    #     zero_point = qmax
-    # else:
-    zero_point = initial_zero_point
+    zero_point = 0
+    if initial_zero_point < qmin:
+        zero_point = qmin
+    elif initial_zero_point > qmax:
+        zero_point = qmax
+    else:
+        zero_point = initial_zero_point
 
     zero_point = int(zero_point)
-    q_x = zero_point + unquant_tensors / scale
+
+    return scale, zero_point
+
+
+def quantize_tensor(x, num_bits=8, min_val=None, max_val=None):
+    try:
+        unquant_weights = x.unwrap().astype(np.float32)  # need to convert to float
+        x = torch.from_numpy(unquant_weights)
+    except:
+        pass
+    # Convert to tensors for compatibility with Tensorflow
+
+    if not min_val and not max_val:
+        min_val, max_val = x.min(), x.max()
+
+    qmin = 0.
+    qmax = 2. ** num_bits - 1.
+
+    scale, zero_point = calcScaleZeroPoint(min_val, max_val, num_bits)
+    q_x = zero_point + x / scale
     q_x.clamp_(qmin, qmax).round_()
     q_x = q_x.round().byte()
 
-    out_tens = QTensor(tensor=q_x, scale=scale, zero_point=zero_point)
-    # quanted_array = q_x.numpy()
-    # return PrivateEncodedTensor(quanted_array), scale, zero_point
-    return out_tens
+    return QTensor(tensor=q_x, scale=scale, zero_point=zero_point)
 
 
-def dequantize_tensor(q_x, scale, zero_point):
-    q_float = q_x.unwrap().astype(np.float32)
-    q_tensor = torch.from_numpy(q_float)
-    deq_tensor = scale * (q_tensor.float() - zero_point)
-    deq_array = deq_tensor.numpy()
-
-    return deq_array
+def dequantize_tensor(q_x):
+    return q_x.scale * (q_x.tensor.float() - q_x.zero_point)
 
 
-def quant_weights_filters2(weights):
-    """NCHW"""
-    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
-    # dequanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
-    scales = np.zeros((weights.shape[2], weights.shape[3]))  # weights are HWCN
-    zero_points = np.zeros((weights.shape[2], weights.shape[3]))
+def quantizeLayer(x, layer, stat, scale_x, zp_x):
+    # for both conv and linear layers
+    # x = torch.from_numpy(x.unwrap().astype(np.float32))
 
-    for i in range(weights.shape[2]):
-        for j in range(weights.shape[3]):
-            q_tens = quantize_tensor(weights[:, :, i, j])
-            quanted_weights[:, :, i, j] = q_tens.tensor
-            scales[i, j] = q_tens.scale
-            zero_points[i, j] = q_tens.zero_point
-            # dequanted_weights[i, j, :, :] = dequantize_tensor(quanted_weights[i, j, :, :], scale, zero_point)
+    # cache old values
+    W = layer.weights.unwrap().astype(np.float32)
+    B = layer.bias.unwrap().astype(np.float32)
 
-    # return PrivateEncodedTensor(quanted_weights.astype(object))
-    return quanted_weights, scales, zero_points
+    W_t = torch.from_numpy(layer.weights.unwrap().astype(np.float32))
+    b_t = torch.from_numpy(layer.bias.unwrap().astype(np.float32))
+
+    # quantise weights, activations are already quantised
+    w = quantize_tensor(W_t)
+    b = quantize_tensor(b_t)
+
+    layer.weights = w.tensor.float()
+    layer.bias = b.tensor.float()
+
+    # This is Quantisation Artihmetic
+    scale_w = w.scale
+    zp_w = w.zero_point
+    scale_b = b.scale
+    zp_b = b.zero_point
+
+    scale_next, zero_point_next = calcScaleZeroPoint(min_val=stat['min'], max_val=stat['max'])
+
+    # Preparing input by shifting
+    X = x.float() - zp_x
+    layer.weights = scale_x * scale_w * (layer.weights - zp_w)
+    layer.weights = PrivateEncodedTensor(layer.weights.numpy().astype(object))
+    layer.bias = scale_b * (layer.bias + zp_b)
+    layer.bias = PrivateEncodedTensor(layer.bias.numpy().astype(object))
+
+    X2 = PrivateEncodedTensor(X.numpy().astype(object))
+    # All int computation
+    scale_next2 = PrivateEncodedTensor(scale_next.numpy().astype(object))
+    x = (layer.forward(X2) / scale_next2) + zero_point_next
+
+    # Reset weights for next forward pass
+    layer.weights = W
+    layer.bias = B
+
+    return x, scale_next, zero_point_next
 
 
-def dequant_weights_filters2(weights, scales, zero_points):
-    dequanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
+# Get Min and max of x tensor, and stores it
+def updateStats(x, stats, key):
+    max_val, _ = torch.max(x, dim=1)
+    min_val, _ = torch.min(x, dim=1)
 
-    for i in range(weights.shape[0]):
-        for j in range(weights.shape[1]):
-            dequanted_weights[i, j, :, :] = dequantize_tensor(weights[i, j, :, :], scales[0, j], zero_points[0, j])
+    if key not in stats:
+        stats[key] = {"max": max_val.sum(), "min": min_val.sum(), "total": 1}
+    else:
+        stats[key]['max'] += max_val.sum().item()
+        stats[key]['min'] += min_val.sum().item()
+        stats[key]['total'] += 1
 
-    return PrivateEncodedTensor(dequanted_weights.astype(object))
+    return stats
+
+
+# Reworked Forward Pass to access activation Stats through updateStats function
+def gatherActivationStats(x, stats, key):
+    x2 = torch.from_numpy(x.unwrap().astype(np.float32))
+    stats = updateStats(x2.clone().view(x2.shape[0], -1), stats, key)
+
+    return stats
 
 
 def conv2d(x, y, strides, padding, precomputed=None, save_mask=True):
@@ -1476,6 +1426,25 @@ class Sequential(Model):
             x = layer.forward(x, predict)
         return x
 
+    def quantForward(self, x, stats):
+        for layer in self.layers:
+            if layer.conv is True:
+                x = quantize_tensor(x, min_val=stats['conv1']['min'], max_val=stats['conv1']['max'])
+                # x_t = PrivateEncodedTensor(x.tensor.astype(object))
+                #
+                # x = layer.forward(x_t, True)
+                x, scale_next, zero_point_next = quantizeLayer(x.tensor, layer, stats['fc'], x.scale, x.zero_point)
+                x = PrivateEncodedTensor(x.tensor.numpy().astype(object))
+            elif layer.fc is True:
+                x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
+                x = PrivateEncodedTensor(x.tensor.numpy().astype(object))
+                x = layer.forward(x, False)
+            else:
+                x = layer.forward(x, False)
+
+        # return PrivateEncodedTensor(x.tensor.numpy().astype(object))
+        return x
+
     def backward(self, d_y, learning_rate):
         for layer in reversed(self.layers):
             d_y = layer.backward(d_y, learning_rate)
@@ -1556,26 +1525,43 @@ class Sequential(Model):
         # Newline after progressbar.
         print()
 
-    # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
+    # Entry function to get stats of all functions.
+    def gatherStats(self, x):
+        test_loss = 0
+        correct = 0
+        stats = {}
+        x = PrivateEncodedTensor(x.astype(object))
+        for layer in self.layers:
+            if layer.collect_stats is True:
+                stats = gatherActivationStats(x, stats, layer.name)
+                x = layer.forward(x, predict=False)
+            else:
+                x = layer.forward(x, predict=False)
+
+        final_stats = {}
+        for key, value in stats.items():
+            final_stats[key] = {"max": value["max"] / value["total"], "min": value["min"] / value["total"]}
+        return final_stats
+
     def predict(self, x, batch_size=32, verbose=0):
-        self.quantize()
+        # self.quantize()
         predict = True
         # predict = False
-        if not isinstance(x, DataLoader): x = DataLoader(x)
+        #if not isinstance(x, DataLoader): x = DataLoader(x)
+        all_data = x.all_data().unwrap()
+        stats_data = all_data[0:64, :, :, :]  # TODO: axes probably wrong
+        #stats_data = DataLoader(stats_data, wrapper=NativeTensor)
+        stats = self.gatherStats(stats_data)
+
+        val_data = all_data[64:, :, :, :]
+        val_data = DataLoader(val_data, wrapper=PrivateEncodedTensor)
         batches = []
-        for batch_index, x_batch in enumerate(x.batches(batch_size)):
+        for batch_index, x_batch in enumerate(val_data.batches(batch_size)):
             if verbose >= 2: print(datetime.now(), "Batch %s" % batch_index)
-            y_batch = self.forward(x_batch, predict)
+            y_batch = self.quantForward(x_batch, stats)
             batches.append(y_batch)
         return reduce(lambda x_, y: x_.concatenate(y), batches)
 
-    """
-    Implement saving of parameters of network (weights of conv and dense layers, relu approx parameters, batch norm
-    parameters?)
-        Take batch norm parameters from whole of test set? or from whole of training set?
-    """
-
-    # TODO: check time taken for evaluation to see if quantization has an effect
     def quantize(self):
         for layer in self.layers:
             layer.quantize()
