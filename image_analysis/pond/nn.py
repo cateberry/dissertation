@@ -463,10 +463,25 @@ def comparison_plot(f, u, Omega):
     plt.show()
 
 
+def get_coeffs(sym_exp, x, n_points):
+    """Get the coefficients of a sympy generated polynomial"""
+    coeff_list = []
+    order = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
+    i = 0
+    expression = sym_exp.expand()
+    while i < len(order):
+        coeff_list.append(expression.as_coefficients_dict()[order[i]])
+        i += 1
+
+    coeffs = np.array(coeff_list[:n_points + 1])
+
+    return coeffs
+
+
 def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     x = sym.Symbol('x')
     f = sym.Max(x, 0)
-    f2 = lambda y: (y > 0) * y
+    func = lambda y: (y > 0) * y
     n_points = order
     omega = [-1, 1]
     psi, points = Lagrange_polynomials(x, n_points, omega, point_distribution=point_dist)
@@ -476,21 +491,15 @@ def approximate_lagrange(order, point_dist='uniform', method='interpolation'):
     else:
         u, c = least_squares2(f, psi, omega)
 
-    coeff_list = []
-    order = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
-    i = 0
-    expression = u.expand()
-    while i < len(order):
-        coeff_list.append(expression.as_coefficients_dict()[order[i]])
-        i += 1
+    coeff_list = get_coeffs(u, x, n_points)
 
     coeffs = np.array(coeff_list[:n_points + 1])
-    comparison_plot(f2, u, omega)
+    comparison_plot(func, u, omega)
     return coeffs
 
 
 # from chebyshev.approximation import Approximation
-def approximate_chebyshev(order, interval):
+def approximate_chebyshev(order, interval, function):
     #     f = sym.Max(x, 0)
     #     polynomial_degree = order
     #     taylor_degree = 20
@@ -498,24 +507,16 @@ def approximate_chebyshev(order, interval):
     #     approx = Approximation(f, interval, polynomial_degree, taylor_degree, point)
     #     coeffs = approx.coeffs
     x = sym.Symbol('x')
-    f2 = lambda y: (y > 0) * y
+    func = function
     n_points = order
-    approx = Chebyshev(interval[0], interval[1], order, f2)
+    approx = Chebyshev(interval[0], interval[1], order, func)
     u = approx.eval(x)
-    print(u)
+    # print(u)
 
-    coeff_list = []
-    orders = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
-    i = 0
-    expression = u.expand()
-    while i < len(orders):
-        coeff_list.append(expression.as_coefficients_dict()[orders[i]])
-        i += 1
+    coeffs = get_coeffs(u, x, n_points)
+    comparison_plot(func, u, interval)
 
-    coeffs = np.array(coeff_list[:n_points + 1])
-    comparison_plot(f2, u, interval)
-
-    return coeffs
+    return coeffs, u
 
 
 class Chebyshev:
@@ -645,9 +646,25 @@ class ReluNormal(Layer):
         elif approx_type == 'lagrange-chebyshev-ls':  # TODO: experiment with number of points
             # Fit a Lagrange polynomial with Chebyshev points to counteract oscillations
             coeffs = approximate_lagrange(order, point_dist='chebyshev', method='leastsquares')
-        elif approx_type == 'chebyshev':
+        elif approx_type == 'chebyshev-relu':
             interval = (-3, 3)
-            coeffs = approximate_chebyshev(order, interval)
+            function = lambda y: (y > 0) * y
+            coeffs, u = approximate_chebyshev(order, interval, function)
+        elif approx_type == 'chebyshev-mod':
+            """Instead of approximating the ReLU function, we simulate the structure of the derivative of the ReLU 
+            function, a Step function. Sigmoid function is a bounded, continuous and infinitely differentiable function,
+            it also has a structure like derivative of the ReLU function in large intervals. We approximate the Sigmoid 
+            function with the polynomial, calculate the integral of the polynomial, and use it as the activation 
+            function"""
+            interval = (-3, 3)
+            function = lambda y: 1 / (1 + np.exp(-y))
+            coeffs, u = approximate_chebyshev(order, interval, function)
+            # Integrate the polynomial approximation of sigmoid function
+            z = sym.Symbol('z')
+            omega = [-1, 1]  # interval of integration
+            integral = sym.integrate(u, (z, omega[0], omega[1]))
+            n_points = order
+            coeffs = get_coeffs(integral, z, n_points)
         else:
             pass
 
