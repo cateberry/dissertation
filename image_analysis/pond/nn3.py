@@ -1128,8 +1128,8 @@ def quantizeLayer(x, layer, stat, scale_x, zp_x):
     # x = torch.from_numpy(x.unwrap().astype(np.float32))
 
     # cache old values
-    W = layer.weights.unwrap().astype(np.float32)
-    B = layer.bias.unwrap().astype(np.float32)
+    W = layer.weights
+    B = layer.bias
 
     W_t = torch.from_numpy(layer.weights.unwrap().astype(np.float32))
     b_t = torch.from_numpy(layer.bias.unwrap().astype(np.float32))
@@ -1141,8 +1141,8 @@ def quantizeLayer(x, layer, stat, scale_x, zp_x):
     layer.weights = w.tensor.float()
     layer.bias = b.tensor.float()
 
-    # This is Quantisation Artihmetic
-    scale_w = w.scale
+    # This is Quantisation arithmetic
+    scale_w = w.scale  # float tensors
     zp_w = w.zero_point
     scale_b = b.scale
     zp_b = b.zero_point
@@ -1152,13 +1152,13 @@ def quantizeLayer(x, layer, stat, scale_x, zp_x):
     # Preparing input by shifting
     X = x.float() - zp_x
     layer.weights = scale_x * scale_w * (layer.weights - zp_w)
-    layer.weights = PrivateEncodedTensor(layer.weights.numpy().astype(object))
+    layer.weights = NativeTensor(layer.weights.numpy().astype(object))
     layer.bias = scale_b * (layer.bias + zp_b)
-    layer.bias = PrivateEncodedTensor(layer.bias.numpy().astype(object))
+    layer.bias = NativeTensor(layer.bias.numpy().astype(object))
 
-    X2 = PrivateEncodedTensor(X.numpy().astype(object))
-    # All int computation
-    scale_next2 = PrivateEncodedTensor(scale_next.numpy().astype(object))
+    X2 = NativeTensor(X.numpy().astype(object))
+    # All unencrypted computation
+    scale_next2 = NativeTensor(scale_next.numpy().astype(object))
     x = (layer.forward(X2) / scale_next2) + zero_point_next
 
     # Reset weights for next forward pass
@@ -1427,17 +1427,21 @@ class Sequential(Model):
         return x
 
     def quantForward(self, x, stats):
+        """Weights unencrypted, data encrypted"""
         for layer in self.layers:
-            if layer.conv is True:
+            if layer.name == 'conv1':
                 x = quantize_tensor(x, min_val=stats['conv1']['min'], max_val=stats['conv1']['max'])
                 # x_t = PrivateEncodedTensor(x.tensor.astype(object))
                 #
                 # x = layer.forward(x_t, True)
                 x, scale_next, zero_point_next = quantizeLayer(x.tensor, layer, stats['fc'], x.scale, x.zero_point)
-                x = PrivateEncodedTensor(x.tensor.numpy().astype(object))
-            elif layer.fc is True:
+                #x = PrivateEncodedTensor(x.tensor.numpy().astype(object))
+                #x = NativeTensor(x)
+                # TODO: x is quantized anyway so why make it private? just use nativetensors
+            elif layer.name == 'fc':
+                x = torch.from_numpy(layer.weights.unwrap().astype(np.float32))
                 x = dequantize_tensor(QTensor(tensor=x, scale=scale_next, zero_point=zero_point_next))
-                x = PrivateEncodedTensor(x.tensor.numpy().astype(object))
+                x = PrivateEncodedTensor(x.numpy().astype(object))
                 x = layer.forward(x, False)
             else:
                 x = layer.forward(x, False)
