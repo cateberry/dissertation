@@ -2,8 +2,8 @@ import keras
 import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
-from pond.nn2 import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, BatchNorm, ReluNormal, Softmax
+from pond.nn import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
+    AveragePooling2D, Flatten, BatchNorm, ReluNormal, Softmax, Sigmoid, PPoly
 from keras.utils import to_categorical
 
 
@@ -24,7 +24,7 @@ _ = np.seterr(invalid='raise')
 
 (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
-x_train = x_train[:, np.newaxis, :, :] / 255.0  # TODO: test without normalising
+x_train = x_train[:, np.newaxis, :, :] / 255.0
 x_test = x_test[:, np.newaxis, :, :] / 255.0
 # x_train = x_train[:, np.newaxis, :, :]
 # x_test = x_test[:, np.newaxis, :, :]
@@ -63,8 +63,11 @@ Need a way to save the parameters of the trained MPC network
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    ReluNormal(order=3, approx_type='regression'),  # approx_type='taylor'),
-    #Relu(order=3),
+    # ReluNormal(order=3, approx_type='chebyshev', function='relu'),
+               # , approx_type='lagrange', function='softplus', method='least-squares', point_dist='chebyshev', omega=[-3, 3]),
+    # Relu(order=3),
+    PPoly(order=2),
+    # Sigmoid(order=3),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
     Dense(10, 6272),  # 3136 5408 6272
@@ -112,10 +115,17 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-x_train = x_train[:96]
-y_train = y_train[:96]
-x_test = x_test[:64]
-y_test = y_test[:64]
+train_size = 512
+val_size = 128
+test_size = 128
+
+# TODO: shuffle datasets?
+x_train = x_train[:train_size]
+y_train = y_train[:train_size]
+x_val = x_test[:val_size]    # take more rows for use in gatherStats
+y_val = y_test[:val_size]
+x_test = x_test[val_size:(val_size+test_size)]
+y_test = y_test[val_size:(val_size+test_size)]
 
 tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
 batch_size = 32
@@ -129,8 +139,8 @@ start = time.time()
 convnet_shallow.fit(
     x_train=DataLoader(x_train, wrapper=tensortype),
     y_train=DataLoader(y_train, wrapper=tensortype),
-    x_valid=DataLoader(x_test, wrapper=tensortype),
-    y_valid=DataLoader(y_test, wrapper=tensortype),
+    x_valid=DataLoader(x_val, wrapper=tensortype),
+    y_valid=DataLoader(y_val, wrapper=tensortype),
     loss=CrossEntropy(),
     epochs=epochs,
     batch_size=batch_size,
@@ -142,7 +152,7 @@ time_taken = end - start
 
 print("Elapsed time: ", time_taken)
 # print("Train accuracy:", accuracy(convnet, x_train, y_train))
-# print("Test accuracy:", accuracy(convnet, x_test, y_test))
+print("Test accuracy:", accuracy(convnet_shallow, x_test, y_test))
 
 # %%
 # PublicEncodedTensor (MPC operations on public values, i.e. unencrypted)
