@@ -24,12 +24,43 @@ _ = np.seterr(invalid='raise')
 
 (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
-x_train = x_train[:, np.newaxis, :, :] / 255.0
-x_test = x_test[:, np.newaxis, :, :] / 255.0
+
+def preprocess_data(dataset):
+    (x_train, y_train), (x_test, y_test) = dataset
+
+    # NOTE: this is the shape used by Tensorflow; other backends may differ
+
+    x_train = x_train[:, np.newaxis, :, :] / 255.0
+    x_test = x_test[:, np.newaxis, :, :] / 255.0
+
+    y_train = to_categorical(y_train, 5)
+    y_test = to_categorical(y_test, 5)
+
+    return (x_train, y_train), (x_test, y_test)
+
+
+def load_data():
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    x_train_public = x_train[y_train < 5]
+    y_train_public = y_train[y_train < 5]
+    x_test_public = x_test[y_test < 5]
+    y_test_public = y_test[y_test < 5]
+    public_dataset = (x_train_public, y_train_public), (x_test_public, y_test_public)
+
+    x_train_private = x_train[y_train >= 5]
+    y_train_private = y_train[y_train >= 5] - 5
+    x_test_private = x_test[y_test >= 5]
+    y_test_private = y_test[y_test >= 5] - 5
+    private_dataset = (x_train_private, y_train_private), (x_test_private, y_test_private)
+
+    return preprocess_data(public_dataset), preprocess_data(private_dataset)
+
+
 # x_train = x_train[:, np.newaxis, :, :]
 # x_test = x_test[:, np.newaxis, :, :]
-# x_train = x_train.astype(np.uint8)  # TODO: test this?
-# x_test = x_test.astype(np.uint8)
+x_train = x_train[:, np.newaxis, :, :] / 255.0
+x_test = x_test[:, np.newaxis, :, :] / 255.0
 y_train = to_categorical(y_train, 10)
 y_test = to_categorical(y_test, 10)
 
@@ -42,31 +73,13 @@ Compare testing of quantized network with non-quantized network
 Need a way to save the parameters of the trained MPC network 
 """
 
-# Size of pooling area for max pooling
-# pool_size = (2, 2)
-# Convolution kernel size (kernel_height, kernel_width, input_channels, num_filters)
-# kernel_size = (5, 5, 1, 16)
-
-# convnet_shallow_gal = Sequential([
-#     #Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
-#     Conv2DQuant((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
-#     BatchNorm(),
-#     ReluGalois(order=4, mu=0.0, sigma=1.0),
-#     AveragePooling2D(pool_size=(2, 2)),
-#     Flatten(),
-#     # Dense(10, 6272),  # 3136 5408 6272
-#     DenseQuant(10, 6272),
-#     Reveal(),
-#     SoftmaxStable()
-# ])
-
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    # ReluNormal(order=3, approx_type='chebyshev', function='relu'),
+    ReluNormal(order=3, approx_type='regression', function='relu'),
                # , approx_type='lagrange', function='softplus', method='least-squares', point_dist='chebyshev', omega=[-3, 3]),
     # Relu(order=3),
-    PPoly(order=2),
+    # PPoly(order=2),
     # Sigmoid(order=3),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
@@ -94,29 +107,49 @@ convnet_shallow = Sequential([
 #     Reveal(),
 #     SoftmaxStable()
 # ])
+# TODO: test deeper net
+# convnet_deep = Sequential([
+#     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.uniform(low=-0.14, high=0.14, size=shp)),
+#     AveragePooling2D(pool_size=(2, 2)),
+#     Relu(),
+#     Conv2D((3, 3, 32, 32), strides=1, padding=1, filter_init=lambda shp: np.random.uniform(low=-0.1, high=0.1, size=shp)),
+#     AveragePooling2D(pool_size=(2, 2)),
+#     Relu(),
+#     Flatten(),
+#     Dense(10, 1568),
+#     Reveal(),
+#     SoftmaxStable()
+# ])
 
 
 # %%
 
-def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
-    predicted_classes = classifier \
-        .predict(DataLoader(x, wrapper), verbose=verbose).reveal() \
-        .argmax(axis=1)
+# def accuracy(classifier, x, y, verbose=0, wrapper=PrivateEncodedTensor):
+#     predicted_classes = classifier.predict(DataLoader(x, wrapper), verbose=verbose).reveal().argmax(axis=1)
+#
+#     correct_classes = NativeTensor(y).argmax(axis=1)
+#     # matches = predicted_classes.unwrap() == correct_classes.unwrap()
+#     # acc = sum(matches) / len(matches)
+#
+#     acc = np.mean(correct_classes == predicted_classes)
+#
+#     return acc
 
-    correct_classes = NativeTensor(y) \
-        .argmax(axis=1)
+def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
+    predicted_classes = classifier.predict(DataLoader(x, wrapper), verbose=verbose).reveal().argmax(axis=1)
+
+    correct_classes = NativeTensor(y).argmax(axis=1)
 
     matches = predicted_classes.unwrap() == correct_classes.unwrap()
     return sum(matches) / len(matches)
-
 
 # %%
 """
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-train_size = 512
-val_size = 128
+train_size = 256
+val_size = 64
 test_size = 128
 
 # TODO: shuffle datasets?
@@ -141,6 +174,8 @@ convnet_shallow.fit(
     y_train=DataLoader(y_train, wrapper=tensortype),
     x_valid=DataLoader(x_val, wrapper=tensortype),
     y_valid=DataLoader(y_val, wrapper=tensortype),
+    x_test=DataLoader(x_test, wrapper=tensortype),
+    y_test=DataLoader(y_test, wrapper=tensortype),
     loss=CrossEntropy(),
     epochs=epochs,
     batch_size=batch_size,
@@ -151,7 +186,7 @@ end = time.time()
 time_taken = end - start
 
 print("Elapsed time: ", time_taken)
-# print("Train accuracy:", accuracy(convnet, x_train, y_train))
+print("Train accuracy:", accuracy(convnet_shallow, x_train, y_train))
 print("Test accuracy:", accuracy(convnet_shallow, x_test, y_test))
 
 # %%

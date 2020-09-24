@@ -5,7 +5,6 @@ from functools import reduce
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor, stack, USE_SPECIALIZED_TRIPLE, \
     REUSE_MASK, generate_conv_triple, generate_convbw_triple, generate_conv_pool_bw_triple, \
     generate_conv_pool_delta_triple
-import math
 import time
 import pond
 import chebyshev
@@ -13,9 +12,9 @@ from scipy.interpolate import approximate_taylor_polynomial
 import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
-import tensorflow as tf
 import torch
 import math
+import itertools
 
 
 class Layer:
@@ -139,7 +138,7 @@ class PPoly(Layer):
         self.c0 = None
         self.c1 = None
         self.c2 = None
-
+        # TODO: try degree 3
     def initialize(self, input_shape, initializer=None, **_):
         if initializer is not None:
             x = np.random.normal(0.0, 1.0, 1000)
@@ -1442,7 +1441,7 @@ class Sequential(Model):
                                             eta, train_loss, train_acc, val_loss, val_acc))
         sys.stdout.flush()
 
-    def fit(self, x_train, y_train, x_valid=None, y_valid=None, loss=None, batch_size=32, epochs=1000,
+    def fit(self, x_train, y_train, x_valid=None, y_valid=None, x_test=None, y_test=None, loss=None, batch_size=32, epochs=1000,
             learning_rate=.01, verbose=0, eval_n_batches=None):
 
         if not isinstance(x_train, DataLoader): x_train = DataLoader(x_train)
@@ -1451,6 +1450,10 @@ class Sequential(Model):
         if x_valid is not None:
             if not isinstance(x_valid, DataLoader): x_valid = DataLoader(x_valid)
             if not isinstance(y_train, DataLoader): y_valid = DataLoader(y_valid)
+
+        if x_test is not None:
+            if not isinstance(x_test, DataLoader): x_test = DataLoader(x_test)
+            if not isinstance(y_test, DataLoader): y_test = DataLoader(y_test)
 
         n_batches = math.ceil(len(x_train.data) / batch_size)
         if eval_n_batches is None:
@@ -1488,6 +1491,21 @@ class Sequential(Model):
                                             train_loss=train_loss,
                                             val_loss=val_loss, val_acc=val_acc)
                         print()
+                        # TODO: write something to compute confusion matrix after final epoch is finished
+                        #   OR add functionality for test set separate from val set that runs after training is
+                        #   finished and computes test acc, confmat etc
+
+                        # After final epoch, evaluate confmat etc
+                        if epoch+1 == epochs:
+                            y_pred_test = self.predict(x_test)
+                            y_pred_test = y_pred_test.unwrap().argmax(axis=1)
+                            y_test = y_test.all_data().unwrap().argmax(axis=1)
+
+                            test_acc = np.mean(y_test == y_pred_test)
+                            print("Test accuracy: {}".format(test_acc))
+
+                            evaluate_generalized_model(y_test, y_pred_test)
+
                     else:
                         # normal print
                         self.print_progress(batch_index, n_batches, batch_size, epoch_start, train_acc=acc,
@@ -1495,10 +1513,7 @@ class Sequential(Model):
         # Newline after progressbar.
         print()
 
-    # TODO: way to load weights, quantize them and initialise them to layers for prediction/testing phase
     def predict(self, x, batch_size=32, verbose=0):
-        # self.quantize()
-        # predict = True
         predict = False
         if not isinstance(x, DataLoader): x = DataLoader(x)
         batches = []
@@ -1508,13 +1523,49 @@ class Sequential(Model):
             batches.append(y_batch)
         return reduce(lambda x_, y: x_.concatenate(y), batches)
 
-    """
-    Implement saving of parameters of network (weights of conv and dense layers, relu approx parameters, batch norm
-    parameters?)
-        Take batch norm parameters from whole of test set? or from whole of training set?
-    """
 
-    # TODO: check time taken for evaluation to see if quantization has an effect
-    def quantize(self):
-        for layer in self.layers:
-            layer.quantize()
+def evaluate_generalized_model(y_test, y_pred):
+    confusion_matrix = np.zeros((10,10))
+
+    for i in range(len(y_test)):
+        confusion_matrix[int(y_test[i]), int(y_pred[i])] += 1
+
+    # TODO: get precision, recall etc
+    #   or at least calculate accuracy (should be same as other test acc output)
+
+    print("===== Confusion Matrix =====")
+    # plt.imshow(confusion_matrix)
+    # plt.show()
+    plot_confusion_matrix(confusion_matrix, list(range(10)))
+    plt.show()
+
+
+def plot_confusion_matrix(confusion_matrix, classes, normalize=False, title='Confusion Matrix', cmap=plt.cm.Blues):
+    """ This function prints and plots the confusion matrix.
+        Normalization can be applied by setting `normalize=True`.
+    """
+    if normalize:
+        confusion_matrix = confusion_matrix.astype('float') / confusion_matrix.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    print(confusion_matrix)
+
+    plt.imshow(confusion_matrix, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    fmt = '.2f' if normalize else '.0f'
+    thresh = confusion_matrix.max() / 2.
+    for i, j in itertools.product(range(confusion_matrix.shape[0]), range(confusion_matrix.shape[1])):
+        plt.text(j, i, format(confusion_matrix[i, j], fmt),
+                 horizontalalignment="center",
+                 color="white" if confusion_matrix[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
