@@ -15,6 +15,8 @@ import sympy as sym
 import torch
 import math
 import itertools
+from lagrange import approximate_lagrange
+from approx_utils import comparison_plot, approximate_chebyshev, get_coeffs
 
 
 class Layer:
@@ -96,7 +98,7 @@ class BatchNorm(Layer):
         # self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
 
         numerator = x - batch_mean
-        denominator = (batch_var + self.epsilon).sqrt()  # TODO: confirmed that sqrt IS being used and works
+        denominator = (batch_var + self.epsilon).sqrt()
         denom_inv = denominator.inv()
         norm = numerator * denom_inv
         bn_approx = norm * self.gamma + self.beta
@@ -139,6 +141,7 @@ class PPoly(Layer):
         self.c1 = None
         self.c2 = None
         # TODO: try degree 3
+
     def initialize(self, input_shape, initializer=None, **_):
         if initializer is not None:
             x = np.random.normal(0.0, 1.0, 1000)
@@ -347,192 +350,15 @@ class Relu(Layer):
         return np.polyfit(x, y, order)
 
 
-def interpolation(f, psi, points):
-    N = len(psi) - 1
-    A = sym.zeros(N + 1, N + 1)
-    b = sym.zeros(N + 1, 1)
-    psi_sym = psi  # save symbolic expression
-    # Turn psi and f into Python functions
-    x = sym.Symbol('x')
-    psi = [sym.lambdify([x], psi[i]) for i in range(N + 1)]
-    f = sym.lambdify([x], f)
-    for i in range(N + 1):
-        for j in range(N + 1):
-            A[i, j] = psi[j](points[i])
-        b[i, 0] = f(points[i])
-    c = A.LUsolve(b)
-    # c is a sympy Matrix object, turn to list
-    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
-    u = sym.simplify(sum(c[i] * psi_sym[i] for i in range(N + 1)))
-    return u, c
-
-
-def least_squares(f, psi, omega):
-    N = len(psi) - 1
-    A = sym.zeros(N + 1, N + 1)
-    b = sym.zeros(N + 1, 1)
-    x = sym.Symbol('x')
-    for i in range(N + 1):
-        for j in range(i, N + 1):
-            integrand = psi[i] * psi[j]
-            I = sym.integrate(integrand, (x, omega[0], omega[1]))
-            if isinstance(I, sym.Integral):
-                # Could not integrate symbolically, fall back
-                # on numerical integration with mpmath.quad
-                integrand = sym.lambdify([x], integrand)
-                I = sym.mpmath.quad(integrand, [omega[0], omega[1]])
-            A[i, j] = A[j, i] = I
-        integrand = psi[i] * f
-        integrand = sym.sympify(integrand)
-        # I = sym.integrate(integrand, (x, omega[0], omega[1]))
-        I = sym.N(sym.Integral(integrand, (x, omega[0], omega[1])))
-        if isinstance(I, sym.Integral):
-            integrand = sym.lambdify([x], integrand)
-            I = sym.mpmath.quad(integrand, [omega[0], omega[1]])
-        b[i, 0] = I
-    c = A.LUsolve(b)
-    c = [sym.simplify(c[i, 0]) for i in range(c.shape[0])]
-    u = sum(c[i] * psi[i] for i in range(len(psi)))
-    return u, c
-
-
-def Lagrange_polynomial(x, i, points):
-    p = 1
-    for k in range(len(points)):
-        if k != i:
-            p *= (x - points[k]) / (points[i] - points[k])
-    return p
-
-
-def Chebyshev_nodes(a, b, N):
-    from math import cos, pi
-    return [0.5 * (a + b) + 0.5 * (b - a) * cos((float(2 * i + 1) / (2 * N + 1)) * pi) for i in range(N + 1)]
-
-
-def Lagrange_polynomials(x, N, omega, point_distribution='uniform'):
-    if point_distribution == 'uniform':
-        if isinstance(x, sym.Symbol):
-            # h = sym.Rational(omega[1] - omega[0], N)
-            h = (omega[1] - omega[0]) / float(N)
-        else:
-            h = (omega[1] - omega[0]) / float(N)
-        points = [omega[0] + i * h for i in range(N + 1)]
-    elif point_distribution == 'chebyshev':
-        points = Chebyshev_nodes(omega[0], omega[1], N)
-    psi = [Lagrange_polynomial(x, i, points) for i in range(N + 1)]
-    return psi, points
-
-
-def comparison_plot(f, u, Omega):
-    x = sym.Symbol('x')
-    u = sym.lambdify([x], u, modules="numpy")
-    resolution = 401  # no of points in plot
-    xcoor = np.linspace(Omega[0], Omega[1], resolution)
-    exact = f(xcoor)
-    approx = u(xcoor)
-    plt.plot(xcoor, approx)
-
-    plt.plot(xcoor, exact)
-    plt.legend(['approximation', 'exact'])
-    plt.show()
-
-
-def get_coeffs(sym_exp, x, order):
-    """Get the coefficients of a sympy generated polynomial"""
-    coeff_list = []
-    orders = [1, x, x ** 2, x ** 3, x ** 4, x ** 5, x ** 6, x ** 7]
-    i = 0
-    expression = sym_exp.expand()
-    while i < len(orders):
-        coeff_list.append(expression.as_coefficients_dict()[orders[i]])
-        i += 1
-
-    coeffs = np.array(coeff_list[:order + 1])
-    coeffs = coeffs[::-1]
-
-    return coeffs
-
-
-def approximate_lagrange(order, fnc, omega, point_dist='uniform', method='interpolation'):
-    x = sym.Symbol('x')
-    # f = sym.Max(x, 0)
-    # func = lambda y: (y > 0) * y
-    n_points = order
-    # omega = [-1, 1]
-    psi, points = Lagrange_polynomials(x, n_points, omega, point_distribution=point_dist)
-    print(psi, points)
-    if method == 'interpolation':
-        u, c = interpolation(fnc, psi, points)
-    else:
-        u, c = least_squares(fnc, psi, omega)
-
-    coeffs = get_coeffs(u, x, order)
-
-    # coeffs = np.array(coeff_list[:n_points + 1])
-    # comparison_plot(func, u, omega)
-    return coeffs, u
-
-
-# from chebyshev.approximation import Approximation
-def approximate_chebyshev(order, interval, fnc):
-    #     f = sym.Max(x, 0)
-    #     polynomial_degree = order
-    #     taylor_degree = 20
-    #     point = 0
-    #     approx = Approximation(f, interval, polynomial_degree, taylor_degree, point)
-    #     coeffs = approx.coeffs
-    x = sym.Symbol('x')
-    n_points = order
-    approx = Chebyshev(interval[0], interval[1], order, fnc)
-    u = approx.eval(x)
-
-    coeffs = get_coeffs(u, x, n_points)
-    # comparison_plot(func, u, interval)
-    return coeffs, u
-
-
-class Chebyshev:
-    """
-    Chebyshev(a, b, n, func)
-    Given a function func, lower and upper limits of the interval [a,b],
-    and maximum degree n, this class computes a Chebyshev approximation
-    of the function.
-    Method eval(x) yields the approximated function value.
-    """
-
-    def __init__(self, a, b, n, func):
-        self.a = a
-        self.b = b
-        self.func = func
-
-        bma = 0.5 * (b - a)
-        bpa = 0.5 * (b + a)
-        f = [func(math.cos(math.pi * (k + 0.5) / n) * bma + bpa) for k in range(n)]
-        fac = 2.0 / n
-        self.c = [fac * sum([f[k] * math.cos(math.pi * j * (k + 0.5) / n)
-                             for k in range(n)]) for j in range(n)]
-
-    def eval(self, x):
-        a, b = self.a, self.b
-        # assert(a <= x <= b)
-        y = (2.0 * x - a - b) * (1.0 / (b - a))
-        y2 = 2.0 * y
-        (d, dd) = (self.c[-1], 0)  # Special case first step for efficiency
-        for cj in self.c[-2:0:-1]:  # Clenshaw's recurrence
-            (d, dd) = (y2 * d - dd + cj, d)
-        return y * d - dd + 0.5 * self.c[0]  # Last step is different
-
-
-class ReluNormal(Layer):
-
+class PolyActivation(Layer):
     def __init__(self, order, a=0.01, mu=0.0, sigma=1.0, n=1000, approx_type='regression', function='relu',
-                 method='interpolation', interval=(-3, 3), point_dist='uniform', omega=[-1, 1]):
+                 method='interpolation', interval=(-3, 3), point_dist='uniform', omega=[-1, 1], scale=3):
         self.cache = None
         self.n_coeff = order + 1
         self.order = order
         self.saved_coeffs = []
         self.coeff = NativeTensor(self.compute_coeffs(order, a, mu, sigma, n, approx_type, function, method, interval,
-                                                      point_dist, omega))
+                                                      point_dist, omega, scale))
         self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
         self.initializer = None
         # assert order > 2
@@ -593,7 +419,7 @@ class ReluNormal(Layer):
         return y
 
     def compute_coeffs(self, order, a=0.01, mu=0.0, sigma=1.0, n=1000, approx_type='regression', function='relu',
-                       method='interpolation', interval=(-3, 3), point_dist='uniform', omega=[-1, 1]):
+                       method='interpolation', interval=(-3, 3), point_dist='uniform', omega=[-1, 1], scale=3):
         x = sym.Symbol('x')
         if function == 'relu':
             fnc_lam = lambda y: self.relu(y)
@@ -622,14 +448,16 @@ class ReluNormal(Layer):
             # Fit a polynomial to the sample data (least squares)
             y = fnc_lam(x)
             coeffs = np.polyfit(x, y, order)  # returns array, highest power first
+            # TODO: plot approx vs actual
         elif approx_type == 'taylor':
             # Fit a Taylor polynomial
-            taylor_approx = approximate_taylor_polynomial(fnc_lam, 0, order, 3)  # TODO: experiment with scale
+            taylor_approx = approximate_taylor_polynomial(fnc_lam, 0, order, scale)  # TODO: experiment with scale
             coeffs = taylor_approx.coeffs  # highest power first
+            # TODO: plot approx vs actual
         elif approx_type == 'lagrange':
-            coeffs, u = approximate_lagrange(order, fnc_sym, omega, point_dist=point_dist, method=method)
+            coeffs, u = approximate_lagrange(order, fnc_lam, fnc_sym, omega, point_dist=point_dist, method=method)
             # coeffs = coeffs[::-1]
-            comparison_plot(fnc_lam, u, omega)
+            # comparison_plot(fnc_lam, u, omega)
         elif approx_type == 'chebyshev':
             # interval = (-3, 3)
             # function = lambda y: (y > 0) * y
@@ -654,80 +482,9 @@ class ReluNormal(Layer):
         else:
             pass
 
-        print(coeffs)
+        print("Polynomial activation function coefficients: {}".format(coeffs))
 
         return coeffs
-
-
-class ReluGalois(Layer):
-
-    def __init__(self, order, mu=0.0, sigma=1.0, n=1000):
-        self.cache = None
-        self.n_coeff = order + 1
-        self.order = order
-        self.saved_coeffs = []
-        self.coeff = NativeTensor(self.compute_coeffs_galois(order, mu, sigma, n))
-        self.coeff_der = (self.coeff * NativeTensor(list(range(self.n_coeff))[::-1]))[:-1]
-        self.initializer = None
-        assert order > 2
-
-    @staticmethod
-    def initialize(input_shape, **_):
-        return input_shape
-
-    def forward(self, x):
-        self.initializer = type(x)
-
-        n_dims = len(x.shape)
-
-        powers = [x, x.square()]
-        for i in range(self.order - 2):
-            powers.append(x * powers[-1])
-
-        # try:
-        #     x_4_1 = powers[3] + 1
-        # except:
-        #     x_4_1 = x * powers[2] + 1
-
-        # stack list into tensor
-        forward_powers = stack(powers).flip(axis=n_dims)
-        # y = forward_powers.dot_QG(self.coeff[:-1], QG=x_4_1) + self.coeff[-1]
-        y = forward_powers.dot(self.coeff[:-1]) + self.coeff[-1]
-
-        # quantize to 8-bit ints
-        # in_range = max(y) - min(y)
-        # out_range = 255
-        # slope = out_range / in_range
-        # y = np.round(- 127 + slope * (y - min(y))).astype(np.int8)
-
-        # cache all powers except the last
-        self.cache = stack(powers[:-1]).flip(axis=n_dims)
-        return y
-
-    def backward(self, d_y, _):
-        # the powers of the forward phase: x^1 ...x^order-1
-        powers = self.cache
-        c = d_y * self.coeff_der[-1]
-        d_y.expand_dims(axis=-1)
-        d_x = (d_y * powers).dot(self.coeff_der[:-1]) + c
-        return d_x
-
-    def compute_coeffs_galois(self, order, mu, sigma, n):
-        x = np.random.normal(mu, sigma, n)
-        y = (x > 0) * x
-        coeffs = np.polyfit(x, y, order)
-
-        # Map x to [-127, 127]
-        in_range = max(coeffs) - min(coeffs)
-        out_range = 255
-        slope = out_range / in_range
-        normed = np.round(- + slope * (coeffs - min(coeffs))).astype(np.uint8)
-        # TODO: try uint8?
-        # self.saved_coeffs.append(coeffs)
-        print(coeffs)
-        print(normed)
-
-        return normed
 
 
 class Square(Layer):
@@ -1443,7 +1200,9 @@ class Sequential(Model):
 
     def fit(self, x_train, y_train, x_valid=None, y_valid=None, x_test=None, y_test=None, loss=None, batch_size=32, epochs=1000,
             learning_rate=.01, verbose=0, eval_n_batches=None):
-
+        print()
+        print("~~~~~ Starting training! ~~~~~")
+        print()
         if not isinstance(x_train, DataLoader): x_train = DataLoader(x_train)
         if not isinstance(y_train, DataLoader): y_train = DataLoader(y_train)
 
@@ -1483,7 +1242,7 @@ class Sequential(Model):
                 if verbose >= 1:
                     if batch_index != 0 and (batch_index + 1) % eval_n_batches == 0:
                         # validation print
-                        y_pred_val = self.predict(x_valid)
+                        y_pred_val = self.predict(x_valid, batch_size=batch_size)
                         val_loss = np.sum(loss.evaluate(y_pred_val, y_valid.all_data()).unwrap())
                         val_acc = np.mean(
                             y_valid.all_data().unwrap().argmax(axis=1) == y_pred_val.unwrap().argmax(axis=1))
@@ -1491,18 +1250,19 @@ class Sequential(Model):
                                             train_loss=train_loss,
                                             val_loss=val_loss, val_acc=val_acc)
                         print()
-                        # TODO: write something to compute confusion matrix after final epoch is finished
-                        #   OR add functionality for test set separate from val set that runs after training is
-                        #   finished and computes test acc, confmat etc
 
                         # After final epoch, evaluate confmat etc
                         if epoch+1 == epochs:
-                            y_pred_test = self.predict(x_test)
+                            y_pred_test = self.predict(x_test, batch_size=batch_size)
                             y_pred_test = y_pred_test.unwrap().argmax(axis=1)
                             y_test = y_test.all_data().unwrap().argmax(axis=1)
 
                             test_acc = np.mean(y_test == y_pred_test)
+                            print()
+                            print("~~~~~~ Finished training! ~~~~~")
                             print("Test accuracy: {}".format(test_acc))
+                            print("Validation accuracy: {}".format(val_acc))
+                            print()
 
                             evaluate_generalized_model(y_test, y_pred_test)
 
@@ -1532,10 +1292,10 @@ def evaluate_generalized_model(y_test, y_pred):
 
     # TODO: get precision, recall etc
     #   or at least calculate accuracy (should be same as other test acc output)
+    print()
+    print("~~~~~ Confusion Matrix ~~~~~")
+    print()
 
-    print("===== Confusion Matrix =====")
-    # plt.imshow(confusion_matrix)
-    # plt.show()
     plot_confusion_matrix(confusion_matrix, list(range(10)))
     plt.show()
 

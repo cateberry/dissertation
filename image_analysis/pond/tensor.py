@@ -3,6 +3,7 @@ import numpy as np
 from math import log
 from math import sqrt
 from im2col.im2col import im2col_indices, col2im_indices
+import time
 
 try:
     from im2col.im2col_cython_float import im2col_cython_float, col2im_cython_float
@@ -272,30 +273,10 @@ COMMUNICATION_ROUNDS = 0
 COMMUNICATED_VALUES = 0
 USE_SPECIALIZED_TRIPLE = False
 REUSE_MASK = False
-BOUND = BASE ** PRECISION
-KAPPA = 9  # ~29 bits  # TODO: what is this
-
-
-def generate_statistical_mask():
-    mask = random.randrange(2 * BOUND * BASE ** KAPPA)
-    # mask = np.array([random.randrange(2 * BOUND * BASE ** KAPPA) for _ in range(np.prod(shape))]).astype(DTYPE).reshape(shape)
-    return mask
-
-
-def generate_zero_triple(shape1, shape2, field):
-    a = np.array([random.randrange(Q) for _ in range(np.prod(shape1))]).astype(DTYPE).reshape(shape1)
-    shares_a = PrivateFieldTensor.from_elements(a)
-
-    b = np.array([random.randrange(Q) for _ in range(np.prod(shape2))]).astype(DTYPE).reshape(shape2)
-    shares_b = PrivateFieldTensor.from_elements(b)
-
-    shares_c = PrivateFieldTensor.from_elements((a.neg() - b) % field)
-
-    return shares_a, shares_b, shares_c
 
 
 def encode(rationals):
-    # return (rationals * BASE ** PRECISION_FRACTIONAL).astype(np.uint64).astype(DTYPE) % Q    # TODO: test int64 instead of int
+    # return (rationals * BASE ** PRECISION_FRACTIONAL).astype(np.uint64).astype(DTYPE) % Q
     #return (rationals.astype('int') * BASE ** PRECISION_FRACTIONAL).astype(DTYPE) % Q
     #return (rationals * BASE ** PRECISION_FRACTIONAL).astype('int').astype(DTYPE) % Q
     map_ints = np.vectorize(int)
@@ -307,10 +288,15 @@ def encode(rationals):
 
 
 def decode(elements):
-    map_negative_range = np.vectorize(
-        lambda element: element if element <= Q / 2 else element - Q)  # , otypes=['int64'])
-    return map_negative_range(elements) / BASE ** PRECISION_FRACTIONAL
+    # map_negative_range = np.vectorize(
+    #     lambda element: element if element <= Q / 2 else element - Q)  # , otypes=['int64'])
+    input_dims = elements.shape
+    negative_ranges = [element if element <= Q / 2 else element - Q for element in elements.flatten()]
+    out = [i / BASE ** PRECISION_FRACTIONAL for i in negative_ranges]
+    # return map_negative_range(elements) / BASE ** PRECISION_FRACTIONAL
 
+    out2 = np.array([out]).reshape(input_dims)
+    return out2
 
 def wrap_if_needed(y):
     if isinstance(y, int) or isinstance(y, float): return PublicEncodedTensor.from_values(np.array([y]))
@@ -997,21 +983,21 @@ class PrivateEncodedTensor:
         if x.masked_transformed is not None: x.masked_transformed = x.masked_transformed.flip(axis)
         return x
 
-    def clamp(x, min, max):
-        x.shares0 = np.clip(x.shares0, min, max)
-        x.shares1 = np.clip(x.shares1, min, max)
-        return x
-
-    def round(x):
-        x.shares0 = np.round(x.shares0)
-        x.shares1 = np.round(x.shares1)
-        return x
-
-    def round_int(x):
-        map_ints = np.vectorize(int)
-        x.shares0 = map_ints(x.shares0).astype(object)
-        x.shares1 = map_ints(x.shares1).astype(object)
-        return x
+    # def clamp(x, min, max):
+    #     x.shares0 = np.clip(x.shares0, min, max)
+    #     x.shares1 = np.clip(x.shares1, min, max)
+    #     return x
+    #
+    # def round(x):
+    #     x.shares0 = np.round(x.shares0)
+    #     x.shares1 = np.round(x.shares1)
+    #     return x
+    #
+    # def round_int(x):
+    #     map_ints = np.vectorize(int)
+    #     x.shares0 = map_ints(x.shares0).astype(object)
+    #     x.shares1 = map_ints(x.shares1).astype(object)
+    #     return x
 
     def add(x, y):
         y = wrap_if_needed(y)
@@ -1102,30 +1088,6 @@ class PrivateEncodedTensor:
             return PrivateEncodedTensor.from_shares(z.shares0, z.shares1).truncate()
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
-    def dot_QG(x, y, QG=Q, precomputed=None, reuse_mask=REUSE_MASK):
-        y = wrap_if_needed(y)
-        if isinstance(y, PublicEncodedTensor):
-            assert x.shape[-1] == y.shape[0]
-            shares0 = x.shares0.dot(y.elements) % QG
-            shares1 = x.shares1.dot(y.elements) % QG
-            return PrivateEncodedTensor.from_shares(shares0, shares1).truncate()
-        if isinstance(y, PrivateEncodedTensor):
-            m, n, o = x.shape[0], x.shape[1], y.shape[1]
-            assert n == y.shape[0]
-            a, b, alpha, beta = None, None, None, None
-            if reuse_mask: a, alpha, b, bet = x.mask, x.masked, y.mask, y.masked
-            if precomputed is None: precomputed = generate_dot_triple(m, n, o, a, b)
-            a, b, ab = precomputed
-            if alpha is None: alpha = (x - a).reveal()
-            if beta is None: beta = (y - b).reveal()
-            z = alpha.dot(beta) + alpha.dot(b) + a.dot(beta) + ab
-            # cache masks
-            if reuse_mask:
-                x.mask, x.masked, y.mask, y.masked = a, alpha, b, beta
-
-            return PrivateEncodedTensor.from_shares(z.shares0, z.shares1).truncate()
-        raise TypeError("%s does not support %s" % (type(x), type(y)))
-
     def square(x):
         a, aa = generate_square_triple(x.shape)
         alpha = (x - a).reveal()
@@ -1137,16 +1099,23 @@ class PrivateEncodedTensor:
         y = wrap_if_needed(y)
         if isinstance(y, NativeTensor): return x.mul(y.inv())
         if isinstance(y, PublicEncodedTensor): return x.mul(y.inv())
-        if isinstance(y, PrivateEncodedTensor):  # WORKS!!!
-            # alpha = y.pow_range()
+        if isinstance(y, PrivateEncodedTensor):
+            start = time.time()
             w0 = (y * 2.0 - 2.9142).neg()
             e0 = (y * w0 - 1.0).neg()
             e1 = e0.square()
             e2 = e1.square()
+            # e3 = e2.square()
 
-            out = x * w0 * (e0 + 1.0) * (e1 + 1.0) * (e2 + 1.0)
-            # out2 = out * 2**(- alpha)
+            out = x * w0 * (e0 + 1.0) * (e1 + 1.0) * (e2 + 1.0)# * (e3 + 1.0)
+            end = time.time()
+            # print("Time taken for division algorithm: ", (end-start))
 
+            # Testing acc with different numbers of iterations:
+            # true_div = x.unwrap() / y.unwrap()
+            # print("True division result: ", true_div.mean())
+            # print("Approximate division result: ", out.unwrap().mean())
+            # print("Error: ", np.abs(true_div.mean() - out.unwrap().mean()))
             return out
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
@@ -1154,24 +1123,30 @@ class PrivateEncodedTensor:
         """
         Newton's method for approximation
         """
-        # initial = 2**(int(alpha.values()/2))
-        # initial = 0.5  # WORKS!!!
-        initial = a * PrivateEncodedTensor.from_values(-0.8099868542) + PrivateEncodedTensor.from_values(1.787727479)
-        initial2 = initial.reveal().inv().values  # WORKS  # TODO: TESTTESTTEST (just run main with nn)
+        # initial = a * PrivateEncodedTensor.from_values(-0.8099868542) + PrivateEncodedTensor.from_values(1.787727479)
+        # initial2 = initial.reveal().inv().values
+        initial = a * PrivateEncodedTensor.from_values(0.5480842735) + PrivateEncodedTensor.from_values(0.3875541065)
         # initial2 = initial.inv()
-        # xn = initial2
-        # xn = PrivateEncodedTensor.from_values(np.array([initial2]))
-        xn = PrivateEncodedTensor.from_values(initial2)
-        for i in range(4):  # TODO: change number of iterations?
+        xn = initial
+        # xn = PrivateEncodedTensor.from_values(initial)
+        start = time.time()
+        for i in range(4):
             xn_1 = (xn + (a / xn)) / 2.0    # private div is used here
             xn = xn_1
+            # print("Approx sqrt after {} iterations: ".format(i+1), xn.unwrap().mean())
+        end = time.time()
+
+        # print("Time taken for sqrt algorithm: ", (end - start))
+
+        # true_sqrt = np.sqrt(a.unwrap())
+        # print("True sqrt result: ", true_sqrt.mean())
+        # print("Error: ", np.abs(true_sqrt.mean() - xn.unwrap().mean()))
 
         return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)
 
     def inv_sqrt(a):
-        initial = a * PrivateEncodedTensor.from_values(-0.8099868542) + PrivateEncodedTensor.from_values(1.787727479)
-        initial2 = initial.reveal().values
-        xn = PrivateEncodedTensor.from_values(initial2)
+        initial = a * PrivateEncodedTensor.from_values(0.5480842735) + PrivateEncodedTensor.from_values(0.3875541065)
+        xn = initial
         for i in range(4):
             xn_1 = (xn / 2.0) * ((a * xn.square()).neg() + 3.0)
             xn = xn_1
