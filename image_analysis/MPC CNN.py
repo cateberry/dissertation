@@ -3,7 +3,7 @@ import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
 from pond.nn import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, BatchNorm, ReluNormal, Softmax, Sigmoid, PPoly
+    AveragePooling2D, Flatten, BatchNorm, PolyActivation, Softmax, Sigmoid, PPoly
 from keras.utils import to_categorical
 
 
@@ -24,39 +24,6 @@ _ = np.seterr(invalid='raise')
 
 (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
 
-
-def preprocess_data(dataset):
-    (x_train, y_train), (x_test, y_test) = dataset
-
-    # NOTE: this is the shape used by Tensorflow; other backends may differ
-
-    x_train = x_train[:, np.newaxis, :, :] / 255.0
-    x_test = x_test[:, np.newaxis, :, :] / 255.0
-
-    y_train = to_categorical(y_train, 5)
-    y_test = to_categorical(y_test, 5)
-
-    return (x_train, y_train), (x_test, y_test)
-
-
-def load_data():
-    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
-
-    x_train_public = x_train[y_train < 5]
-    y_train_public = y_train[y_train < 5]
-    x_test_public = x_test[y_test < 5]
-    y_test_public = y_test[y_test < 5]
-    public_dataset = (x_train_public, y_train_public), (x_test_public, y_test_public)
-
-    x_train_private = x_train[y_train >= 5]
-    y_train_private = y_train[y_train >= 5] - 5
-    x_test_private = x_test[y_test >= 5]
-    y_test_private = y_test[y_test >= 5] - 5
-    private_dataset = (x_train_private, y_train_private), (x_test_private, y_test_private)
-
-    return preprocess_data(public_dataset), preprocess_data(private_dataset)
-
-
 # x_train = x_train[:, np.newaxis, :, :]
 # x_test = x_test[:, np.newaxis, :, :]
 x_train = x_train[:, np.newaxis, :, :] / 255.0
@@ -76,7 +43,7 @@ Need a way to save the parameters of the trained MPC network
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    ReluNormal(order=3, approx_type='regression', function='relu'),
+    PolyActivation(order=3, approx_type='chebyshev-mod'),
                # , approx_type='lagrange', function='softplus', method='least-squares', point_dist='chebyshev', omega=[-3, 3]),
     # Relu(order=3),
     # PPoly(order=2),
@@ -148,9 +115,9 @@ def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
 Train on different types of Tensor
 """
 # NativeTensor (like plaintext)
-train_size = 256
-val_size = 64
-test_size = 128
+train_size = 512
+val_size = 96
+test_size = 96
 
 # TODO: shuffle datasets?
 x_train = x_train[:train_size]
@@ -186,8 +153,8 @@ end = time.time()
 time_taken = end - start
 
 print("Elapsed time: ", time_taken)
-print("Train accuracy:", accuracy(convnet_shallow, x_train, y_train))
-print("Test accuracy:", accuracy(convnet_shallow, x_test, y_test))
+# print("Train accuracy:", accuracy(convnet_shallow, x_train, y_train))
+# print("Test accuracy:", accuracy(convnet_shallow, x_test, y_test))
 
 # %%
 # PublicEncodedTensor (MPC operations on public values, i.e. unencrypted)
