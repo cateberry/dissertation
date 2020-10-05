@@ -12,7 +12,6 @@ from scipy.interpolate import approximate_taylor_polynomial
 import pickle
 import matplotlib.pyplot as plt
 import sympy as sym
-import torch
 import math
 import itertools
 from lagrange import approximate_lagrange
@@ -104,6 +103,18 @@ class BatchNorm(Layer):
         bn_approx = norm * self.gamma + self.beta
         self.cache = numerator, denominator, norm, self.gamma, denom_inv
 
+        # TESTING
+        input = x.unwrap()
+        batch_mean = input.mean(axis=1, keepdims=True)
+        batch_var = ((input - batch_mean)**2).mean(axis=1, keepdims=True)
+        norm = (input - batch_mean) / np.sqrt(batch_var + self.epsilon)
+        bn_true = norm * self.gamma.unwrap() + self.beta.unwrap()
+
+        error = np.abs(bn_true - bn_approx.unwrap())
+        error = np.sum(error)
+
+        # print("Batch normalisation protocol approximation error: ", error)
+
         return bn_approx
 
     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
@@ -114,67 +125,11 @@ class BatchNorm(Layer):
         d_beta = d_y.sum(axis=1, keepdims=True)
 
         d_norm = d_y * gamma
-        # For debugging:
-        # d_x1 = d_norm * N
-        # d_x2 = d_norm.sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
-        # d_x3 = norm * (d_norm * norm).sum(axis=1, keepdims=True)  # .expand_dims(axis=1)
-        # d_x4 = denominator * (d_x1 - d_x2 - d_x3)
-        # d_x = d_x4.inv() * (1 / N)
-
         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
-                                                                                                          keepdims=True))).inv() * (
-                      1 / N)
+                                                                                    keepdims=True))).inv() * (1 / N)
 
         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
         self.beta = (d_beta * learning_rate).neg() + self.beta
-
-        return d_x
-
-
-class PPoly(Layer):
-    def __init__(self, order=2):
-        self.cache = None
-        self.n_coeff = order + 1
-        self.order = order
-        self.initializer = None
-        self.c0 = None
-        self.c1 = None
-        self.c2 = None
-        # TODO: try degree 3
-
-    def initialize(self, input_shape, initializer=None, **_):
-        if initializer is not None:
-            x = np.random.normal(0.0, 1.0, 1000)
-            # Fit a polynomial to the sample data (least squares)
-            y = (x > 0) * x
-            coeffs = np.polyfit(x, y, 2)
-
-            self.c0 = initializer(coeffs[2])
-            self.c1 = initializer(coeffs[1])
-            self.c2 = initializer(coeffs[0])
-
-            # self.c1 = initializer(np.random.randn(input_shape[0], input_shape[1], 1, 1))
-            # self.c1 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
-            # self.c2 = initializer(np.random.randn(input_shape[0], input_shape[1], 1, 1))
-            # self.c2 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
-            # TODO: initialise with relu approximation and then tune
-
-        return input_shape
-
-    def forward(self, x, predict=False):
-        self.initializer = type(x)
-        y = self.c0 + x * self.c1 + x.square() * self.c2
-        self.cache = x, x.square()
-
-        return y
-
-    def backward(self, d_y, learning_rate):
-        x, x_square = self.cache
-        d_c1 = (d_y * x).sum(axis=1, keepdims=True)
-        d_c2 = (d_y * x.square()).sum(axis=1, keepdims=True)
-        d_x = d_y * (self.c1 + self.c2 * x * 2)
-        self.c1 = (d_c1 * learning_rate).neg() + self.c1
-        self.c2 = (d_c2 * learning_rate).neg() + self.c2
 
         return d_x
 
@@ -448,43 +403,175 @@ class PolyActivation(Layer):
             # Fit a polynomial to the sample data (least squares)
             y = fnc_lam(x)
             coeffs = np.polyfit(x, y, order)  # returns array, highest power first
-            # TODO: plot approx vs actual
+            comparison_plot(fnc_lam, coeffs, interval, order)
         elif approx_type == 'taylor':
             # Fit a Taylor polynomial
-            taylor_approx = approximate_taylor_polynomial(fnc_lam, 0, order, scale)  # TODO: experiment with scale
+            taylor_approx = approximate_taylor_polynomial(fnc_lam, 0, order, scale)
             coeffs = taylor_approx.coeffs  # highest power first
-            # TODO: plot approx vs actual
+            comparison_plot(fnc_lam, coeffs, interval, order)
         elif approx_type == 'lagrange':
             coeffs, u = approximate_lagrange(order, fnc_lam, fnc_sym, omega, point_dist=point_dist, method=method)
             # coeffs = coeffs[::-1]
-            # comparison_plot(fnc_lam, u, omega)
+            comparison_plot(fnc_lam, coeffs, omega, order)
         elif approx_type == 'chebyshev':
             # interval = (-3, 3)
             # function = lambda y: (y > 0) * y
-            coeffs, u = approximate_chebyshev(order, interval, fnc_lam)
-            comparison_plot(fnc_lam, u, interval)
+            # if function=='relu' and order==4 and omega==[-30, 30]:
+            #     coeffs = np.array([-1.14336248669584e-5, -5.95628436682387e-5, 0.0242116345400538, 0.543770351280278, 2.17567881555380])
+            # elif function=='relu' and order==4 and omega==[-100, 100]:
+            #     coeffs = np.array([-3.08707871407876e-7, -5.36065593014148e-6, 0.00726349036201613, 0.543770351280278, 7.25226271851265])
+            # if function=='relu' and order==3 and omega==[-30, 30]:  # w2, cheby
+            #     coeffs = np.array([0.000156812446804741, 0.0137623035039298, 0.386300436680033, 3.43687601059216])
+            # if function=='relu' and order==3 and omega==[-30, 30]:  # w, uni
+            #     coeffs = np.array([0, 0.0125000000000000, 0.500000000000000, 3.75000000000000])
+            # elif function == 'relu' and order == 3 and omega == [-100, 100]:
+            #     coeffs = np.array([1.41131202124266e-5, 0.00412869105117894, 0.386300436680033, 11.4562533686406])
+            # elif function == 'relu' and order == 3 and omega == [-10, 10]:  # w2, uni
+            #     coeffs = np.array([-9.99200722162643e-19, 0.0375000000000001, 0.500000000000000, 1.25000000000000])
+            # elif function == 'relu' and order == 3 and omega == [-7, 7]:  # w2, chebyshev
+            #     coeffs = np.array([0.00288022861478096, 0.0589813007311278, 0.386300436680033, 0.801937735804838])
+            if function=='relu' and order==2 and omega==[-7, 7]:  # w, uniform
+                coeffs = np.array([0.0714285714285714, 0.500000000000000, 4.99600361081320e-16])
+            elif function=='relu' and order==2 and omega==[-10, 10]:    # using w, uniform (worked)
+                coeffs = np.array([0.0500000000000000, 0.500000000000000, -3.57353036051222e-16])
+            elif function=='relu' and order==2 and omega==[-30, 30]:    # using w, uniform
+                coeffs = np.array([0.0166666666666667, 0.500000000000000, 3.05484804119516e-15])
+            # elif function=='relu' and order==2 and omega==[-30, 30]:  # w, cheby
+            #     coeffs = np.array([0.0133333333333334, 0.523606797749979, 3.70820393249937])
+
+            # coeffs, u = approximate_chebyshev(order, interval, fnc_lam)
+            # coeffs = coeffs[::-1]
+            comparison_plot(fnc_lam, coeffs, interval, order)
         elif approx_type == 'chebyshev-mod':
             """Instead of approximating the ReLU function, we simulate the structure of the derivative of the ReLU 
             function, a Step function. Sigmoid function is a bounded, continuous and infinitely differentiable function,
             it also has a structure like derivative of the ReLU function in large intervals. We approximate the Sigmoid 
             function with the polynomial, calculate the integral of the polynomial, and use it as the activation 
             function"""
-            # interval = (-3, 3)
-            fnc = lambda y: np.exp(-1 / (np.exp(1) - 5 + y**2))
-            coeffs, u = approximate_chebyshev(order, interval, fnc)
+            fnc_lam = lambda y: np.exp(-1 / (np.exp(1) - 5 + y**2))
+            coeffs, u = approximate_chebyshev(order, interval, fnc_lam)
             # Integrate the polynomial approximation of sigmoid function
             x = sym.Symbol('x')
-            # omega = [-8, 8]  # interval of integration
             integral = sym.integrate(u, x)
             n_points = order
-            # x = sym.Symbol('x')
             coeffs = get_coeffs(integral, x, n_points)
+            fnc_sig = lambda y: self.sigmoid(y)
+            comparison_plot(fnc_sig, coeffs, interval, order)
         else:
             pass
 
         print("Polynomial activation function coefficients: {}".format(coeffs))
 
         return coeffs
+
+
+class PPoly(Layer):
+    def __init__(self, order=2):
+        self.cache = None
+        self.n_coeff = order + 1
+        self.order = order
+        self.initializer = None
+        self.c0 = None
+        self.c1 = None
+        self.c2 = None
+        self.c3 = None
+        self.c4 = None
+
+    def initialize(self, input_shape, initializer=None, **_):
+        if initializer is not None:
+            x = np.random.normal(0.0, 1.1, 1000)
+            # Fit a polynomial to the sample data (least squares)
+            y = (x > 0) * x
+
+            if self.order == 3:
+                coeffs = np.polyfit(x, y, 3)
+                self.c0 = initializer(coeffs[3])
+                self.c1 = initializer(coeffs[2])
+                self.c2 = initializer(coeffs[1])
+                self.c3 = initializer(coeffs[0])
+            elif self.order == 4:
+                coeffs = np.polyfit(x, y, 4)
+                self.c0 = initializer(coeffs[4])
+                self.c1 = initializer(coeffs[3])
+                self.c2 = initializer(coeffs[2])
+                self.c3 = initializer(coeffs[1])
+                self.c4 = initializer(coeffs[0])
+            else:
+                coeffs = np.polyfit(x, y, 2)
+                self.c0 = initializer(coeffs[2])
+                self.c1 = initializer(coeffs[1])
+                self.c2 = initializer(coeffs[0])
+
+            # self.c1 = initializer(np.random.randn(input_shape[0], input_shape[1], 1, 1))
+            # self.c1 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
+            # self.c2 = initializer(np.random.randn(input_shape[0], input_shape[1], 1, 1))
+            # self.c2 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
+            # TODO: initialise with relu approximation and then tune
+
+        return input_shape
+
+    def get_coeffs(self):
+        try:
+            coeffs = [self.c4.unwrap()[0,0,0,0], self.c2.unwrap()[0,0,0,0], self.c0.unwrap()[0,0,0,0]]
+        except:
+            coeffs = []
+        return coeffs
+
+    def forward(self, x, predict=False):
+        self.initializer = type(x)
+        x_square = x.square()
+
+        if self.order == 2:
+            y = self.c0 + x * self.c1 + x_square * self.c2
+            self.cache = x, x_square
+        elif self.order == 4:
+            x_cube = x_square * x
+            x_quad = x_cube * x
+            y = self.c0 + x_square * self.c2 + x_quad * self.c4
+            self.cache = x, x_square, x_cube, x_quad
+        else:
+            x_cube = x_square * x
+            y = self.c0 + x * self.c1 + x_square * self.c2 * x_cube * self.c3
+            self.cache = x, x_square, x_cube
+
+        return y
+
+    def backward(self, d_y, learning_rate):
+        if self.order == 2:
+            x, x_square = self.cache
+            d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
+            d_c1 = (d_y * x).sum(axis=1, keepdims=True)
+            d_c2 = (d_y * x_square).sum(axis=1, keepdims=True)
+            d_x = d_y * (self.c1 + self.c2 * x * 2)
+            self.c0 = (d_c0 * learning_rate).neg() + self.c0
+            self.c1 = (d_c1 * learning_rate).neg() + self.c1
+            self.c2 = (d_c2 * learning_rate).neg() + self.c2
+        elif self.order == 3:
+            x, x_square, x_cube = self.cache
+            d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
+            d_c1 = (d_y * x).sum(axis=1, keepdims=True)
+            d_c2 = (d_y * x_square * x_cube * self.c3).sum(axis=1, keepdims=True)
+            d_c3 = (d_y * x_cube * x_square * self.c2).sum(axis=1, keepdims=True)
+            d_x = d_y * (self.c1 + x_cube * x * self.c3 * self.c2 * 5)
+            self.c0 = (d_c0 * learning_rate).neg() + self.c0
+            self.c1 = (d_c1 * learning_rate).neg() + self.c1
+            self.c2 = (d_c2 * learning_rate).neg() + self.c2
+            self.c3 = (d_c3 * learning_rate).neg() + self.c3
+        else:
+            x, x_square, x_cube, x_quad = self.cache
+            d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
+            # d_c1 = (d_y * x).sum(axis=1, keepdims=True)
+            d_c2 = (d_y * x_square).sum(axis=1, keepdims=True)
+            # d_c3 = (d_y * x_cube).sum(axis=1, keepdims=True)
+            d_c4 = (d_y * x_quad).sum(axis=1, keepdims=True)
+            d_x = d_y * (self.c2 * x * 2 + self.c4 * x_cube * 4)
+            self.c0 = (d_c0 * learning_rate).neg() + self.c0
+            # self.c1 = (d_c1 * learning_rate).neg() + self.c1
+            self.c2 = (d_c2 * learning_rate).neg() + self.c2
+            # self.c3 = (d_c3 * learning_rate).neg() + self.c3
+            self.c4 = (d_c4 * learning_rate).neg() + self.c4
+
+        return d_x
 
 
 class Square(Layer):
@@ -799,135 +886,6 @@ class CrossEntropy(Loss):
 
 class SoftmaxCrossEntropy(Loss):
     pass
-
-
-def quant_weights(weights):
-    maxs = np.max(weights)
-    mins = np.min(weights)
-    in_range = maxs - mins
-    out_range = 255
-    slope = out_range / in_range  # TODO: try in_range / out_range
-    quanted_weights = np.round(0 + slope * (weights - mins)).astype(np.uint8)
-
-    return quanted_weights
-
-
-def quant_weights_filters(weights):
-    """For NativeTensors"""
-    weights = weights.unwrap()  # .astype(np.float32)  # TODO: operate on object
-    mins = np.min(weights, axis=(0, 1), keepdims=True)
-    maxs = np.max(weights, axis=(0, 1), keepdims=True)
-    in_range = maxs - mins
-    out_range = 255
-    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2], weights.shape[3]))
-    # slope = out_range / in_range
-    slope = in_range / out_range
-    for i in range(weights.shape[2]):
-        for j in range(weights.shape[3]):
-            int1 = (weights[:, :, i, j] - mins[:, :, i, j])
-            sl1 = slope[:, :, i, j]
-            int2 = 0 + (sl1 * int1)
-            int3 = np.round(int2)
-            quanted_weights[:, :, i, j] = int3  # .astype(np.uint8)
-
-    # quanted_weights2 = ((weights - mins) * slope + 0).round().convert_uint8()
-    return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-def quant_weights_bias(weights):
-    """For NativeTensors"""
-    weights = weights.unwrap()  # .astype(np.float32)
-    mins = np.min(weights, axis=(1, 2), keepdims=True)
-    maxs = np.max(weights, axis=(1, 2), keepdims=True)
-    in_range = maxs - mins
-    out_range = 255
-    quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2]))
-    # slope = out_range / in_range
-    slope = in_range / out_range
-    for i in range(weights.shape[0]):
-        quanted_weights[i, :, :] = np.round(
-            (0 + (slope[i, :, :] * (weights[i, :, :] - mins[i, :, :]))))  # .astype(np.uint8)
-    return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-def quant_weights_array(weights):
-    """For NativeTensors"""
-    weights = weights.unwrap()  # .astype(np.float32)
-    maxs = np.max(weights)
-    mins = np.min(weights)
-    in_range = maxs - mins
-    out_range = 255
-    # quanted_weights = np.zeros(weights.shape[0])
-    # slope = out_range / in_range
-    slope = in_range / out_range
-    quanted_weights = np.round((0 + (slope * (weights - mins))))  # .astype(np.uint8)
-    return PrivateEncodedTensor(quanted_weights.astype(object))
-
-
-#
-# def quant_weights_tensor(weights):
-#     """For NativeTensors
-#     Input tensor format: NCHW
-#     N is number of filters
-#     Want to quantize each filter individually?
-#     """
-#     # Represent weights as ndarrays rather than NativeTensors
-#     unquant_weights = weights.reveal().values.astype(np.float32)
-#     # Convert to tensors for compatibility with Tensorflow
-#     unquant_tensors = tf.convert_to_tensor(unquant_weights, dtype=tf.float32)
-#
-#     min_range = unquant_tensors.min()
-#     max_range = unquant_tensors.max()
-#     T = 'quint8'
-#
-#     quanted_weights = tf.quantization.quantize(
-#         unquant_tensors, min_range, max_range, T, mode='MIN_COMBINED',
-#         round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
-#         ensure_minimum_range=0.01)
-#
-#     return PrivateEncodedTensor(quanted_weights.astype(object))
-#
-#
-def quant_weights_tensor2(weights):
-    from torch.quantization import QConfig, MinMaxObserver, default_observer
-    """For NativeTensors
-    Input tensor format: NCHW
-    N is number of filters
-    Want to quantize each filter individually?
-    """
-    # Represent weights as ndarrays rather than NativeTensors
-    unquant_weights = weights.unwrap().astype(np.float32)
-    # Convert to tensors for compatibility with Tensorflow
-    unquant_tensors = torch.from_numpy(unquant_weights)
-    """
-    We want to quantize each filter in each batch separately, so we need to find
-    the min and max for each filter
-    """
-
-    quant_scheme = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, reduce_range=False)
-    calc = quant_scheme.forward(unquant_tensors)
-    params = quant_scheme.calculate_qparams()
-    print(params)
-
-    quant_tensors = torch.quantize_per_tensor(unquant_tensors, scale=params[0].numpy()[0],
-                                              zero_point=params[1].numpy()[0].astype(int), dtype=torch.quint8)
-
-    # quanted_weights = np.zeros((weights.shape[0], weights.shape[1], weights.shape[2],
-    #                            weights.shape[3]))
-    # T = 'quint8'
-    # for i in range(weights.shape[2]):
-    #     for j in range(weights.shape[3]):
-    #         min_range = unquant_weights[:, :, i, j].min(axis=(0, 1), keepdims=True)
-    #         max_range = unquant_weights[:, :, i, j].max(axis=(0, 1), keepdims=True)
-    #
-    #         quanted_weights[:, :, i, j] = tf.quantization.quantize(
-    #             unquant_tensors[:, :, i, j], min_range, max_range, T, mode='MIN_COMBINED',
-    #             round_mode='HALF_AWAY_FROM_ZERO', name=None, narrow_range=False, axis=None,
-    #             ensure_minimum_range=0.01)
-
-    quanted_array = quant_tensors.int_repr().numpy()  # .astype(object)
-
-    return PrivateEncodedTensor(quanted_array)
 
 
 def conv2d(x, y, strides, padding, precomputed=None, save_mask=True):
@@ -1263,6 +1221,11 @@ class Sequential(Model):
                             print("Test accuracy: {}".format(test_acc))
                             print("Validation accuracy: {}".format(val_acc))
                             print()
+                            try:
+                                coeffs = self.layers[2].get_coeffs()
+                                print('PPoly coefficients: ', coeffs)
+                            except:
+                                pass
 
                             evaluate_generalized_model(y_test, y_pred_test)
 

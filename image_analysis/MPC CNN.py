@@ -43,11 +43,8 @@ Need a way to save the parameters of the trained MPC network
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    PolyActivation(order=3, approx_type='chebyshev-mod'),
-               # , approx_type='lagrange', function='softplus', method='least-squares', point_dist='chebyshev', omega=[-3, 3]),
-    # Relu(order=3),
-    # PPoly(order=2),
-    # Sigmoid(order=3),
+    # PolyActivation(order=3, approx_type='regression', function='relu'),
+    PPoly(order=2),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
     Dense(10, 6272),  # 3136 5408 6272
@@ -55,52 +52,23 @@ convnet_shallow = Sequential([
     SoftmaxStable()
 ])
 
-# convnet = Sequential([
-#     Conv2D((5, 5, 1, 1), strides=1, padding=1,
-#            filter_init=lambda shp: np.random.uniform(low=-0.14, high=0.14, size=shp)),
-#     # BatchNormTest(),
-#     # ReluNormal(order=3),
-#     AveragePooling2D(pool_size=(2,2)),
-#     Conv2D((5, 5, 1, 20), strides=1, padding=1,
-#            filter_init=lambda shp: np.random.uniform(low=-0.1, high=0.1, size=shp)),
-#     # BatchNormTest(),
-#     # ReluNormal(order=3),
-#     AveragePooling2D(pool_size=(2,2)),
-#     Flatten(),
-#     Dense(500, 500),
-#     BatchNormTest(),
-#     ReluNormal(order=3),
-#     Dense(10, 500),
-#     Reveal(),
-#     SoftmaxStable()
-# ])
-# TODO: test deeper net
 # convnet_deep = Sequential([
-#     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.uniform(low=-0.14, high=0.14, size=shp)),
+#     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
+#     BatchNorm(),
+#     PolyActivation(order=3, approx_type='regression', function='relu'),
 #     AveragePooling2D(pool_size=(2, 2)),
-#     Relu(),
-#     Conv2D((3, 3, 32, 32), strides=1, padding=1, filter_init=lambda shp: np.random.uniform(low=-0.1, high=0.1, size=shp)),
+#     Conv2D((3, 3, 32, 16), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
+#     BatchNorm(),
+#     PolyActivation(order=3, approx_type='regression', function='relu'),
 #     AveragePooling2D(pool_size=(2, 2)),
-#     Relu(),
 #     Flatten(),
-#     Dense(10, 1568),
+#     Dense(10, 784),  # 3136 5408 6272
 #     Reveal(),
 #     SoftmaxStable()
 # ])
 
 
 # %%
-
-# def accuracy(classifier, x, y, verbose=0, wrapper=PrivateEncodedTensor):
-#     predicted_classes = classifier.predict(DataLoader(x, wrapper), verbose=verbose).reveal().argmax(axis=1)
-#
-#     correct_classes = NativeTensor(y).argmax(axis=1)
-#     # matches = predicted_classes.unwrap() == correct_classes.unwrap()
-#     # acc = sum(matches) / len(matches)
-#
-#     acc = np.mean(correct_classes == predicted_classes)
-#
-#     return acc
 
 def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
     predicted_classes = classifier.predict(DataLoader(x, wrapper), verbose=verbose).reveal().argmax(axis=1)
@@ -119,7 +87,6 @@ train_size = 512
 val_size = 96
 test_size = 96
 
-# TODO: shuffle datasets?
 x_train = x_train[:train_size]
 y_train = y_train[:train_size]
 x_val = x_test[:val_size]    # take more rows for use in gatherStats
@@ -127,7 +94,7 @@ y_val = y_test[:val_size]
 x_test = x_test[val_size:(val_size+test_size)]
 y_test = y_test[val_size:(val_size+test_size)]
 
-tensortype = PrivateEncodedTensor  # TODO: Change back to NativeTensor
+tensortype = PrivateEncodedTensor
 batch_size = 32
 input_shape = [batch_size] + list(x_train.shape[1:])
 epochs = 3
@@ -156,67 +123,3 @@ print("Elapsed time: ", time_taken)
 # print("Train accuracy:", accuracy(convnet_shallow, x_train, y_train))
 # print("Test accuracy:", accuracy(convnet_shallow, x_test, y_test))
 
-# %%
-# PublicEncodedTensor (MPC operations on public values, i.e. unencrypted)
-# Can train on subset of batches due to long training times
-# x_train = x_train[:256]
-# y_train = y_train[:256]
-# x_test = x_test[:256]
-# y_test = y_test[:256]
-raise Exception()
-tensortype = PublicEncodedTensor
-epochs = 1
-learning_rate = 0.01
-
-convnet_shallow.initialize(initializer=tensortype, input_shape=input_shape)
-
-start = time.time()
-convnet_shallow.fit(
-    x_train=DataLoader(x_train, wrapper=tensortype),
-    y_train=DataLoader(y_train, wrapper=tensortype),
-    x_valid=DataLoader(x_test, wrapper=tensortype),
-    y_valid=DataLoader(y_test, wrapper=tensortype),
-    loss=CrossEntropy(),
-    epochs=epochs,
-    batch_size=batch_size,
-    verbose=1,
-    learning_rate=learning_rate
-)
-end = time.time()
-time_taken = end - start
-
-print("Elapsed time: ", time_taken)
-# print("Train accuracy:", accuracy(convnet, x_train, y_train))
-# print("Test accuracy:", accuracy(convnet, x_test, y_test))
-
-# %%
-# PrivateEncodedTensor (full MPC)
-x_train = x_train[:256]
-y_train = y_train[:256]
-x_test = x_test[:256]
-y_test = y_test[:256]
-
-tensortype = PrivateEncodedTensor
-epochs = 1
-learning_rate = 0.01
-
-convnet_shallow.initialize(initializer=tensortype, input_shape=input_shape)
-
-start = time.time()
-convnet_shallow.fit(
-    x_train=DataLoader(x_train, wrapper=tensortype),
-    y_train=DataLoader(y_train, wrapper=tensortype),
-    x_valid=DataLoader(x_test, wrapper=tensortype),
-    y_valid=DataLoader(y_test, wrapper=tensortype),
-    loss=CrossEntropy(),
-    epochs=epochs,
-    batch_size=batch_size,
-    verbose=1,
-    learning_rate=learning_rate
-)
-end = time.time()
-time_taken = end - start
-
-print("Elapsed time: ", time_taken)
-# print("Train accuracy:", accuracy(convnet, x_train, y_train))
-# print("Test accuracy:", accuracy(convnet, x_test, y_test))

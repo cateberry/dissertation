@@ -1106,8 +1106,11 @@ class PrivateEncodedTensor:
             e1 = e0.square()
             e2 = e1.square()
             # e3 = e2.square()
+            # e4 = e3.square()
+            # e5 = e4.square()
 
-            out = x * w0 * (e0 + 1.0) * (e1 + 1.0) * (e2 + 1.0)# * (e3 + 1.0)
+
+            out = x * w0 * (e0 + 1.0) * (e1 + 1.0) * (e2 + 1.0)# * (e3 + 1.0) * (e4 + 1.0) * (e5 + 1.0)
             end = time.time()
             # print("Time taken for division algorithm: ", (end-start))
 
@@ -1115,7 +1118,7 @@ class PrivateEncodedTensor:
             # true_div = x.unwrap() / y.unwrap()
             # print("True division result: ", true_div.mean())
             # print("Approximate division result: ", out.unwrap().mean())
-            # print("Error: ", np.abs(true_div.mean() - out.unwrap().mean()))
+            # print("Division protocol approximation error: ", np.abs(true_div.mean() - out.unwrap().mean()))
             return out
         raise TypeError("%s does not support %s" % (type(x), type(y)))
 
@@ -1123,24 +1126,22 @@ class PrivateEncodedTensor:
         """
         Newton's method for approximation
         """
-        # initial = a * PrivateEncodedTensor.from_values(-0.8099868542) + PrivateEncodedTensor.from_values(1.787727479)
-        # initial2 = initial.reveal().inv().values
         initial = a * PrivateEncodedTensor.from_values(0.5480842735) + PrivateEncodedTensor.from_values(0.3875541065)
-        # initial2 = initial.inv()
         xn = initial
-        # xn = PrivateEncodedTensor.from_values(initial)
+
         start = time.time()
         for i in range(4):
             xn_1 = (xn + (a / xn)) / 2.0    # private div is used here
             xn = xn_1
-            # print("Approx sqrt after {} iterations: ".format(i+1), xn.unwrap().mean())
+            # print("Approx square root after {} iterations: ".format(i+1), xn.unwrap().mean())
         end = time.time()
 
-        # print("Time taken for sqrt algorithm: ", (end - start))
-
+        # print("Time taken for square root algorithm: ", (end - start))
+        #
         # true_sqrt = np.sqrt(a.unwrap())
-        # print("True sqrt result: ", true_sqrt.mean())
-        # print("Error: ", np.abs(true_sqrt.mean() - xn.unwrap().mean()))
+        # print("True square root result: ", true_sqrt.mean())
+        # print("Approximate square root result: ", xn.unwrap().mean())
+        # print("Square root protocol approximation error: ", np.abs(true_sqrt.mean() - xn.unwrap().mean()))
 
         return PrivateEncodedTensor.from_shares(xn.shares0, xn.shares1)
 
@@ -1171,7 +1172,8 @@ class PrivateEncodedTensor:
         z = self.mul(minus_one)
         return PrivateEncodedTensor.from_shares(z.shares0, z.shares1)
 
-    def transpose(self, *axes, reuse_mask=REUSE_MASK):
+    def transpose(self, *axes):
+        reuse_mask = False
         if self.mask is not None and reuse_mask:
             out = PrivateEncodedTensor.from_shares(self.shares0.transpose(*axes), self.shares1.transpose(*axes))
             if self.mask is not None: out.mask = self.mask.transpose(*axes)

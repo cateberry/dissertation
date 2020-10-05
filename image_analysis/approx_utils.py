@@ -53,15 +53,24 @@ def least_squares(f, psi, omega):
     return u, c
 
 
-def comparison_plot(f, u, Omega):
-    x = sym.Symbol('x')
-    u = sym.lambdify([x], u, modules="numpy")
+def comparison_plot(f, coeffs, omega, order):
+    # x = sym.Symbol('x')
+    # u = sym.lambdify([x], u, modules="numpy")
     resolution = 401  # no of points in plot
-    xcoor = np.linspace(Omega[0], Omega[1], resolution)
+    xcoor = np.linspace(omega[0], omega[1], resolution)
     exact = f(xcoor)
-    approx = u(xcoor)
-    plt.plot(xcoor, approx)
+    # approx = u(xcoor)
+    # Add functionality to compute polynomial with coeffs as coefficients over xcoor
+    # all highest power first ?
 
+    orders = list(range(order+1))
+    o = orders[::-1]
+    approx = np.zeros(resolution)
+    for i in range(order+1):
+        ap = coeffs[i]*(xcoor**o[i])
+        approx = approx + ap
+
+    plt.plot(xcoor, approx)
     plt.plot(xcoor, exact)
     plt.legend(['approximation', 'exact'])
     plt.show()
@@ -91,6 +100,7 @@ def approximate_chebyshev(order, interval, fnc):
     u = approx.eval(x)
 
     coeffs = get_coeffs(u, x, n_points)
+
     return coeffs, u
 
 
