@@ -983,22 +983,6 @@ class PrivateEncodedTensor:
         if x.masked_transformed is not None: x.masked_transformed = x.masked_transformed.flip(axis)
         return x
 
-    # def clamp(x, min, max):
-    #     x.shares0 = np.clip(x.shares0, min, max)
-    #     x.shares1 = np.clip(x.shares1, min, max)
-    #     return x
-    #
-    # def round(x):
-    #     x.shares0 = np.round(x.shares0)
-    #     x.shares1 = np.round(x.shares1)
-    #     return x
-    #
-    # def round_int(x):
-    #     map_ints = np.vectorize(int)
-    #     x.shares0 = map_ints(x.shares0).astype(object)
-    #     x.shares1 = map_ints(x.shares1).astype(object)
-    #     return x
-
     def add(x, y):
         y = wrap_if_needed(y)
         if isinstance(y, PublicEncodedTensor):
@@ -1108,7 +1092,6 @@ class PrivateEncodedTensor:
             # e3 = e2.square()
             # e4 = e3.square()
             # e5 = e4.square()
-
 
             out = x * w0 * (e0 + 1.0) * (e1 + 1.0) * (e2 + 1.0)# * (e3 + 1.0) * (e4 + 1.0) * (e5 + 1.0)
             end = time.time()

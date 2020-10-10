@@ -16,6 +16,7 @@ import math
 import itertools
 from lagrange import approximate_lagrange
 from approx_utils import comparison_plot, approximate_chebyshev, get_coeffs
+import random
 
 
 class Layer:
@@ -76,8 +77,8 @@ class BatchNorm(Layer):
             weight_shape = [input_shape[-1], ]
             self.gamma = initializer(np.ones(weight_shape))  # initialise scale parameter at 1
             self.beta = initializer(np.zeros(weight_shape))  # initialise shift parameter at 0
-            # self.moving_mean = initializer(np.zeros(weight_shape))
-            # self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
+            self.moving_mean = initializer(np.zeros(weight_shape))
+            self.moving_var = initializer(np.zeros(weight_shape))  # TODO: cost/benefit analysis
         return input_shape  # shape doesn't change after BN
 
     def quantize(self):
@@ -87,35 +88,48 @@ class BatchNorm(Layer):
         """
         Batch norm forward pass
         """
+        if predict is False:
+            denom = 1 / x.shape[1]  # mean in channel dimension
+            batch_mean = x.sum(axis=1, keepdims=True) * denom
+            self.moving_mean += batch_mean  # for use in prediction
 
-        denom = 1 / x.shape[1]  # mean in channel dimension
-        batch_mean = x.sum(axis=1, keepdims=True) * denom  # tested with Tensors and seems like it works
-        # self.moving_mean = batch_mean * 0.1 + self.moving_mean * 0.9  # for use in prediction
+            batch_var_sum = (x - batch_mean).square()
+            batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom
+            self.moving_var += batch_var
 
-        batch_var_sum = (x - batch_mean).square()
-        batch_var = batch_var_sum.sum(axis=1, keepdims=True) * denom  # tested against plaintext and same to 3dp
-        # self.moving_var = batch_var * 0.1 + self.moving_var * 0.9
+            numerator = x - batch_mean
+            denominator = (batch_var + self.epsilon).sqrt()
+            denom_inv = denominator.inv()
+            norm = numerator * denom_inv
+            bn_approx = norm * self.gamma + self.beta
+            self.cache = numerator, denominator, norm, self.gamma, denom_inv
 
-        numerator = x - batch_mean
-        denominator = (batch_var + self.epsilon).sqrt()
-        denom_inv = denominator.inv()
-        norm = numerator * denom_inv
-        bn_approx = norm * self.gamma + self.beta
-        self.cache = numerator, denominator, norm, self.gamma, denom_inv
+            return bn_approx
 
+        else:  # TODO: test prediction
+            batch_mean = self.moving_mean / 16
+            batch_var = self.moving_var / 16
+
+            numerator = x - batch_mean
+            denominator = (batch_var + self.epsilon).inv_sqrt()
+
+            norm = numerator * denominator
+            bn_approx = norm * self.gamma + self.beta
+
+            return bn_approx
         # TESTING
-        input = x.unwrap()
-        batch_mean = input.mean(axis=1, keepdims=True)
-        batch_var = ((input - batch_mean)**2).mean(axis=1, keepdims=True)
-        norm = (input - batch_mean) / np.sqrt(batch_var + self.epsilon)
-        bn_true = norm * self.gamma.unwrap() + self.beta.unwrap()
-
-        error = np.abs(bn_true - bn_approx.unwrap())
-        error = np.sum(error)
+        # input = x.unwrap()
+        # batch_mean = input.mean(axis=1, keepdims=True)
+        # batch_var = ((input - batch_mean) ** 2).mean(axis=1, keepdims=True)
+        # norm = (input - batch_mean) / np.sqrt(batch_var + self.epsilon)
+        # bn_true = norm * self.gamma.unwrap() + self.beta.unwrap()
+        #
+        # error = np.abs(bn_true - bn_approx.unwrap())
+        # error = np.sum(error)
 
         # print("Batch normalisation protocol approximation error: ", error)
 
-        return bn_approx
+        # return bn_approx
 
     def backward(self, d_y, learning_rate):  # dy here is dL/dy = dL/bn_approx
         N, D = d_y.shape[-2], d_y.shape[-1]
@@ -126,7 +140,8 @@ class BatchNorm(Layer):
 
         d_norm = d_y * gamma
         d_x = (denominator * (d_norm * N - d_norm.sum(axis=1, keepdims=True) - norm * (d_norm * norm).sum(axis=1,
-                                                                                    keepdims=True))).inv() * (1 / N)
+                                                                                                          keepdims=True))).inv() * (
+                          1 / N)
 
         self.gamma = (d_gamma * learning_rate).neg() + self.gamma
         self.beta = (d_beta * learning_rate).neg() + self.beta
@@ -162,7 +177,7 @@ class Sigmoid(Layer):
     def initialize(input_shape, **_):
         return input_shape
 
-    def forward(self, x):
+    def forward(self, x, predict=False):
         w0 = 0.5
         w1 = 0.2159198015
         w3 = -0.0082176259
@@ -368,11 +383,6 @@ class PolyActivation(Layer):
         y = x * (1 / (1 + np.exp(-x)))
         return y
 
-    @staticmethod
-    def softplus(x):
-        y = np.log(1 + np.exp(x))
-        return y
-
     def compute_coeffs(self, order, a=0.01, mu=0.0, sigma=1.0, n=1000, approx_type='regression', function='relu',
                        method='interpolation', interval=(-3, 3), point_dist='uniform', omega=[-1, 1], scale=3):
         x = sym.Symbol('x')
@@ -391,9 +401,6 @@ class PolyActivation(Layer):
         elif function == 'swish':
             fnc_lam = lambda y: self.swish(y)
             fnc_sym = x * (1 / (1 + sym.exp(-x)))
-        elif function == 'softplus':
-            fnc_lam = lambda y: self.softplus(y)
-            fnc_sym = sym.log(1 + sym.exp(x))
         else:
             pass
 
@@ -434,12 +441,20 @@ class PolyActivation(Layer):
                 coeffs = np.array([0.0714285714285714, 0.500000000000000, 4.99600361081320e-16])
             elif function=='relu' and order==2 and omega==[-10, 10]:    # using w, uniform (worked)
                 coeffs = np.array([0.0500000000000000, 0.500000000000000, -3.57353036051222e-16])
-            elif function=='relu' and order==2 and omega==[-30, 30]:    # using w, uniform
-                coeffs = np.array([0.0166666666666667, 0.500000000000000, 3.05484804119516e-15])
+            # elif function=='relu' and order==2 and omega==[-30, 30]:    # using w, uniform
+            #     coeffs = np.array([0.0166666666666667, 0.500000000000000, 3.05484804119516e-15])
             # elif function=='relu' and order==2 and omega==[-30, 30]:  # w, cheby
             #     coeffs = np.array([0.0133333333333334, 0.523606797749979, 3.70820393249937])
+            # if function == 'tanh' and order == 3 and omega == [-10, 10]:  # w, uni
+            #     coeffs = np.array(
+            #         [-0.00224142064486179, 4.99600361081320e-18, 0.324142064073949, -2.49800180540650e-18])
+            # elif function == 'tanh' and order == 3 and omega == [-7, 7]:  # w, uni
+            #     coeffs = np.array(
+            #         [-0.00637644065702291, 5.09796286817674e-18, 0.455302497471829, -4.46638191284151e-16])
+            elif function == 'swish' and order == 2 and omega == [-7, 7]:  # w, uni
+                coeffs = np.array([0.0712984212579427, 0.500000000000000, 6.59194920871187e-16])
 
-            # coeffs, u = approximate_chebyshev(order, interval, fnc_lam)
+            coeffs, u = approximate_chebyshev(order, interval, fnc_lam)
             # coeffs = coeffs[::-1]
             comparison_plot(fnc_lam, coeffs, interval, order)
         elif approx_type == 'chebyshev-mod':
@@ -448,7 +463,7 @@ class PolyActivation(Layer):
             it also has a structure like derivative of the ReLU function in large intervals. We approximate the Sigmoid 
             function with the polynomial, calculate the integral of the polynomial, and use it as the activation 
             function"""
-            fnc_lam = lambda y: np.exp(-1 / (np.exp(1) - 5 + y**2))
+            fnc_lam = lambda y: np.exp(-1 / (np.exp(1) - 5 + y ** 2))
             coeffs, u = approximate_chebyshev(order, interval, fnc_lam)
             # Integrate the polynomial approximation of sigmoid function
             x = sym.Symbol('x')
@@ -466,7 +481,7 @@ class PolyActivation(Layer):
 
 
 class PPoly(Layer):
-    def __init__(self, order=2):
+    def __init__(self, order=2, initialise=None):
         self.cache = None
         self.n_coeff = order + 1
         self.order = order
@@ -476,19 +491,29 @@ class PPoly(Layer):
         self.c2 = None
         self.c3 = None
         self.c4 = None
+        self.c5 = None
+        self.initialise = initialise
 
     def initialize(self, input_shape, initializer=None, **_):
         if initializer is not None:
-            x = np.random.normal(0.0, 1.1, 1000)
-            # Fit a polynomial to the sample data (least squares)
+            # x = np.random.normal(0.0, 1.2, 1000)
+            # # Fit a polynomial to the sample data (least squares)
+            # y = (x < 0) * 0.01 * x + (x >= 0) * x
+            x = np.linspace(-0.5, 0.5, 1000)
             y = (x > 0) * x
 
-            if self.order == 3:
+            if self.initialise == 'uniform':
+                self.c1 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
+                self.c2 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
+                # print(self.c1, self.c2)
+
+            elif self.order == 3:
                 coeffs = np.polyfit(x, y, 3)
                 self.c0 = initializer(coeffs[3])
                 self.c1 = initializer(coeffs[2])
                 self.c2 = initializer(coeffs[1])
                 self.c3 = initializer(coeffs[0])
+                print(self.c3, self.c2, self.c1, self.c0)
             elif self.order == 4:
                 coeffs = np.polyfit(x, y, 4)
                 self.c0 = initializer(coeffs[4])
@@ -496,23 +521,32 @@ class PPoly(Layer):
                 self.c2 = initializer(coeffs[2])
                 self.c3 = initializer(coeffs[1])
                 self.c4 = initializer(coeffs[0])
+                print(self.c4, self.c3, self.c2, self.c1, self.c0)
+            elif self.order == 5:
+                coeffs = np.polyfit(x, y, 5)
+                self.c0 = initializer(coeffs[5])
+                self.c1 = initializer(coeffs[4])
+                self.c2 = initializer(coeffs[3])
+                self.c3 = initializer(coeffs[2])
+                self.c4 = initializer(coeffs[1])
+                self.c5 = initializer(coeffs[0])
+                print(self.c5, self.c4, self.c3, self.c2, self.c1, self.c0)
             else:
                 coeffs = np.polyfit(x, y, 2)
-                self.c0 = initializer(coeffs[2])
+                # self.c0 = initializer(coeffs[2])
                 self.c1 = initializer(coeffs[1])
                 self.c2 = initializer(coeffs[0])
-
+                print(self.c2, self.c1)
             # self.c1 = initializer(np.random.randn(input_shape[0], input_shape[1], 1, 1))
             # self.c1 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
             # self.c2 = initializer(np.random.randn(input_shape[0], input_shape[1], 1, 1))
             # self.c2 = initializer(np.random.uniform(low=-1.5, high=1.5, size=(input_shape[0], input_shape[1], 1, 1)))
-            # TODO: initialise with relu approximation and then tune
 
         return input_shape
 
     def get_coeffs(self):
         try:
-            coeffs = [self.c4.unwrap()[0,0,0,0], self.c2.unwrap()[0,0,0,0], self.c0.unwrap()[0,0,0,0]]
+            coeffs = [self.c3, self.c2, self.c1, self.c0]
         except:
             coeffs = []
         return coeffs
@@ -521,49 +555,79 @@ class PPoly(Layer):
         self.initializer = type(x)
         x_square = x.square()
 
-        if self.order == 2:
-            y = self.c0 + x * self.c1 + x_square * self.c2
+        if self.initialise == 'uniform':
+            y = x * self.c1 + x_square * self.c2
+            self.cache = x, x_square
+        elif self.order == 2:
+            y = x * self.c1 + x_square * self.c2
             self.cache = x, x_square
         elif self.order == 4:
             x_cube = x_square * x
             x_quad = x_cube * x
             y = self.c0 + x_square * self.c2 + x_quad * self.c4
             self.cache = x, x_square, x_cube, x_quad
-        else:
+        elif self.order == 3:
             x_cube = x_square * x
-            y = self.c0 + x * self.c1 + x_square * self.c2 * x_cube * self.c3
-            self.cache = x, x_square, x_cube
+            # x_quint = x_cube * x
+            y = x * self.c1 + x_square * self.c2 + x_cube * self.c3
+            # y = self.c0 + x * self.c1 + x_quint * self.c2 * self.c3
+            self.cache = x, x_square, x_cube #, x_quint
+        else:
+            # x_cube = x_square * x
+            x_quad = x_square * x_square
+            x_quint = x_quad * x
+            y = self.c0 + x * self.c1 + x_quint * self.c5
+            self.cache = x, x_square, x_quad, x_quint
 
         return y
 
     def backward(self, d_y, learning_rate):
-        if self.order == 2:
+        if self.initialise == 'uniform':
             x, x_square = self.cache
-            d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
             d_c1 = (d_y * x).sum(axis=1, keepdims=True)
             d_c2 = (d_y * x_square).sum(axis=1, keepdims=True)
             d_x = d_y * (self.c1 + self.c2 * x * 2)
-            self.c0 = (d_c0 * learning_rate).neg() + self.c0
+            self.c1 = (d_c1 * learning_rate).neg() + self.c1
+            self.c2 = (d_c2 * learning_rate).neg() + self.c2
+
+        elif self.order == 2:
+            x, x_square = self.cache
+            # d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
+            d_c1 = (d_y * x).expand_dims(axis=-1).sum(axis=(0,1,2,3))#, keepdims=True)
+            d_c2 = (d_y * x_square).expand_dims(axis=-1).sum(axis=(0,1,2,3))#, keepdims=True)
+            d_x = d_y * (self.c1 + self.c2 * x * 2)
+            # self.c0 = (d_c0 * learning_rate).neg() + self.c0
             self.c1 = (d_c1 * learning_rate).neg() + self.c1
             self.c2 = (d_c2 * learning_rate).neg() + self.c2
         elif self.order == 3:
             x, x_square, x_cube = self.cache
-            d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
-            d_c1 = (d_y * x).sum(axis=1, keepdims=True)
-            d_c2 = (d_y * x_square * x_cube * self.c3).sum(axis=1, keepdims=True)
-            d_c3 = (d_y * x_cube * x_square * self.c2).sum(axis=1, keepdims=True)
-            d_x = d_y * (self.c1 + x_cube * x * self.c3 * self.c2 * 5)
-            self.c0 = (d_c0 * learning_rate).neg() + self.c0
+            # d_c0 = (d_y * 1).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            d_c1 = (d_y * x).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            d_c2 = (d_y * x_square).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            d_c3 = (d_y * x_cube).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            d_x = d_y * (self.c1 + self.c2 * x * 2 + self.c3 * x_square * 3)
+            # self.c0 = (d_c0 * learning_rate).neg() + self.c0
             self.c1 = (d_c1 * learning_rate).neg() + self.c1
             self.c2 = (d_c2 * learning_rate).neg() + self.c2
             self.c3 = (d_c3 * learning_rate).neg() + self.c3
+        elif self.order == 5:
+            x, x_square, x_quad, x_quint = self.cache
+            d_c0 = (d_y * 1).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            d_c1 = (d_y * x).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            # d_c2 = (d_y * x_quint * self.c3).sum(axis=1, keepdims=True)
+            # d_c3 = (d_y * x_quint * self.c2).sum(axis=1, keepdims=True)
+            d_c5 = (d_y * x_quint).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
+            d_x = d_y * (self.c1 + x_quad * self.c5 * 5)
+            self.c0 = (d_c0 * learning_rate).neg() + self.c0
+            self.c1 = (d_c1 * learning_rate).neg() + self.c1
+            self.c5 = (d_c5 * learning_rate).neg() + self.c5
         else:
             x, x_square, x_cube, x_quad = self.cache
-            d_c0 = (d_y * 1).sum(axis=1, keepdims=True)
+            d_c0 = (d_y * 1).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
             # d_c1 = (d_y * x).sum(axis=1, keepdims=True)
-            d_c2 = (d_y * x_square).sum(axis=1, keepdims=True)
+            d_c2 = (d_y * x_square).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
             # d_c3 = (d_y * x_cube).sum(axis=1, keepdims=True)
-            d_c4 = (d_y * x_quad).sum(axis=1, keepdims=True)
+            d_c4 = (d_y * x_quad).expand_dims(axis=-1).sum(axis=(0, 1, 2, 3))
             d_x = d_y * (self.c2 * x * 2 + self.c4 * x_cube * 4)
             self.c0 = (d_c0 * learning_rate).neg() + self.c0
             # self.c1 = (d_c1 * learning_rate).neg() + self.c1
@@ -675,7 +739,6 @@ class Conv2D:
         out, self.cached_x_col = conv2d(x, self.filters, self.strides, self.padding)
 
         return out + self.bias
-
 
     def backward(self, d_y, learning_rate):
         x = self.cache
@@ -1156,8 +1219,8 @@ class Sequential(Model):
                                             eta, train_loss, train_acc, val_loss, val_acc))
         sys.stdout.flush()
 
-    def fit(self, x_train, y_train, x_valid=None, y_valid=None, x_test=None, y_test=None, loss=None, batch_size=32, epochs=1000,
-            learning_rate=.01, verbose=0, eval_n_batches=None):
+    def fit(self, x_train, y_train, x_valid=None, y_valid=None, x_test=None, y_test=None, loss=None, batch_size=32,
+            epochs=3, learning_rate=.01, verbose=0, eval_n_batches=None):
         print()
         print("~~~~~ Starting training! ~~~~~")
         print()
@@ -1210,7 +1273,7 @@ class Sequential(Model):
                         print()
 
                         # After final epoch, evaluate confmat etc
-                        if epoch+1 == epochs:
+                        if epoch + 1 == epochs:
                             y_pred_test = self.predict(x_test, batch_size=batch_size)
                             y_pred_test = y_pred_test.unwrap().argmax(axis=1)
                             y_test = y_test.all_data().unwrap().argmax(axis=1)
@@ -1248,13 +1311,11 @@ class Sequential(Model):
 
 
 def evaluate_generalized_model(y_test, y_pred):
-    confusion_matrix = np.zeros((10,10))
+    confusion_matrix = np.zeros((10, 10))
 
     for i in range(len(y_test)):
         confusion_matrix[int(y_test[i]), int(y_pred[i])] += 1
 
-    # TODO: get precision, recall etc
-    #   or at least calculate accuracy (should be same as other test acc output)
     print()
     print("~~~~~ Confusion Matrix ~~~~~")
     print()

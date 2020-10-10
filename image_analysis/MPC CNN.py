@@ -3,7 +3,7 @@ import numpy as np
 import time
 from pond.tensor import NativeTensor, PublicEncodedTensor, PrivateEncodedTensor
 from pond.nn import Dense, Relu, Reveal, CrossEntropy, SoftmaxStable, Sequential, DataLoader, Conv2D, \
-    AveragePooling2D, Flatten, BatchNorm, PolyActivation, Softmax, Sigmoid, PPoly
+    AveragePooling2D, Flatten, BatchNorm, PolyActivation, Softmax, Sigmoid, PPoly, PPolyTest
 from keras.utils import to_categorical
 
 
@@ -43,8 +43,9 @@ Need a way to save the parameters of the trained MPC network
 convnet_shallow = Sequential([
     Conv2D((3, 3, 1, 32), strides=1, padding=1, filter_init=lambda shp: np.random.normal(scale=0.1, size=shp)),
     BatchNorm(),
-    # PolyActivation(order=3, approx_type='regression', function='relu'),
-    PPoly(order=2),
+    # PolyActivation(order=3, approx_type='chebyshev', function='relu', interval=(-7, 7)),
+    PPoly(order=2),#, initialise='uniform'),
+    # Relu(order=3, domain=(-1.5, 1.5)),
     AveragePooling2D(pool_size=(2, 2)),
     Flatten(),
     Dense(10, 6272),  # 3136 5408 6272
@@ -67,24 +68,12 @@ convnet_shallow = Sequential([
 #     SoftmaxStable()
 # ])
 
-
-# %%
-
-def accuracy(classifier, x, y, verbose=0, wrapper=NativeTensor):
-    predicted_classes = classifier.predict(DataLoader(x, wrapper), verbose=verbose).reveal().argmax(axis=1)
-
-    correct_classes = NativeTensor(y).argmax(axis=1)
-
-    matches = predicted_classes.unwrap() == correct_classes.unwrap()
-    return sum(matches) / len(matches)
-
 # %%
 """
 Train on different types of Tensor
 """
-# NativeTensor (like plaintext)
-train_size = 512
-val_size = 96
+train_size = 96
+val_size = 64
 test_size = 96
 
 x_train = x_train[:train_size]
@@ -97,7 +86,7 @@ y_test = y_test[val_size:(val_size+test_size)]
 tensortype = PrivateEncodedTensor
 batch_size = 32
 input_shape = [batch_size] + list(x_train.shape[1:])
-epochs = 3
+epochs = 1
 learning_rate = 0.01
 
 convnet_shallow.initialize(initializer=tensortype, input_shape=input_shape)
